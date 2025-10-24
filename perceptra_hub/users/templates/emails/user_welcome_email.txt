@@ -1,0 +1,17 @@
+{% load i18n %}
+
+{% blocktrans %}Hello {{ user.username|default:user.email }},{% endblocktrans %}
+
+{% blocktrans %}Your account has been successfully created. Here are your login details:{% endblocktrans %}
+
+{% blocktrans %}Email:{% endblocktrans %} {{ user.email }}
+{% blocktrans %}Password:{% endblocktrans %} {{ password }}
+
+{% blocktrans %}Please log in at: http://cvisionops.want:5173{% endblocktrans %}
+
+{% blocktrans %}Please change your password as soon as possible to keep your account secure.{% endblocktrans %}
+
+{% blocktrans %}Please note that changing your password and other settings will be supported in the future.{% endblocktrans %}
+
+{% blocktrans %}Thank you!{% endblocktrans %}
+

@@ -1,0 +1,23 @@
+{% load i18n %}
+<html>
+  <body>
+    <p>{% blocktrans %}Hello {{ user.username|default:user.email }},{% endblocktrans %}</p>
+
+    <p>{% blocktrans %}Your account has been successfully created. Here are your login details:{% endblocktrans %}</p>
+
+    <p>
+      <strong>{% blocktrans %}Email:{% endblocktrans %}</strong> {{ user.email }}<br>
+      <strong>{% blocktrans %}Password:{% endblocktrans %}</strong> {{ password }}
+    </p>
+
+    <p>
+      {% blocktrans %}Please log in at{% endblocktrans %}
+      <a href="http://cvisionops.want:5173" target="_blank" rel="noopener noreferrer">VisionNest</a>
+      {% blocktrans %}and change your password as soon as possible to keep your account secure.{% endblocktrans %}
+    </p>
+
+    <p>{% blocktrans %}Please note that changing your password and other settings will be supported in the future.{% endblocktrans %}</p>
+
+    <p>{% blocktrans %}Thank you!{% endblocktrans %}</p>
+  </body>
+</html>
