@@ -10,6 +10,10 @@ import hashlib
 import logging
 from io import BytesIO
 from PIL import Image as PILImage
+from asgiref.sync import sync_to_async
+
+import django
+django.setup()
 
 from api.dependencies import get_current_user, get_current_organization, RequestContext, get_request_context, bypass_auth_dev
 from storage.models import StorageProfile
@@ -71,6 +75,161 @@ def generate_storage_key(organization: Organization, filename: str, project_id: 
 
 
 # ============= Image Upload Endpoints =============
+@sync_to_async
+def process_image_upload(
+    ctx: RequestContext,
+    file_data: bytes,
+    filename: str,
+    content_type: Optional[str],
+    file_format: str,
+    name: Optional[str],
+    project_id: Optional[UUID],
+    tag_names: List[str],
+    source_of_origin: Optional[str],
+    storage_profile_id: Optional[UUID]
+):
+    """
+    Synchronous function to process image upload.
+    """
+    file_size = len(file_data)
+    
+    # Calculate checksum
+    checksum = calculate_checksum(file_data)
+    
+    # Check for duplicate (same checksum in same organization)
+    existing = Image.objects.filter(
+        organization=ctx.organization,
+        checksum=checksum
+    ).first()
+    
+    if existing:
+        logger.warning(f"Duplicate image detected: {checksum}")
+        return {
+            "duplicate": True,
+            "image": existing
+        }
+    
+    # Get image dimensions
+    width, height = get_image_dimensions(file_data)
+    
+    if width == 0 or height == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to read image dimensions. File may be corrupted."
+        )
+    
+    # Get storage profile
+    if storage_profile_id:
+        try:
+            storage_profile = StorageProfile.objects.get(
+                id=storage_profile_id,
+                organization=ctx.organization,
+                is_active=True
+            )
+        except StorageProfile.DoesNotExist:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Storage profile {storage_profile_id} not found"
+            )
+    else:
+        # Use default storage profile
+        storage_profile = StorageProfile.objects.filter(
+            organization=ctx.organization,
+            is_default=True,
+            is_active=True
+        ).first()
+        
+        if not storage_profile:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No default storage profile configured for organization"
+            )
+    
+    # Generate storage key
+    storage_key = generate_storage_key(
+        ctx.organization,
+        filename,
+        project_id
+    )
+    
+    # Upload to storage
+    adapter = get_storage_adapter_for_profile(storage_profile)
+    
+    adapter.upload_file(
+        BytesIO(file_data),
+        storage_key,
+        content_type=content_type or 'image/jpeg',
+        metadata={
+            'organization': ctx.organization.slug,
+            'uploaded_by': ctx.user.username,
+            'original_filename': filename
+        }
+    )
+    
+    logger.info(f"Uploaded file to storage: {storage_key}")
+    
+    # Create Image record
+    image = Image.objects.create(
+        organization=ctx.organization,
+        storage_profile=storage_profile,
+        storage_key=storage_key,
+        name=name or filename,
+        original_filename=filename,
+        file_format=file_format,
+        file_size=file_size,
+        width=width,
+        height=height,
+        checksum=checksum,
+        source_of_origin=source_of_origin or 'upload',
+        uploaded_by=ctx.user
+    )
+    
+    logger.info(f"Created image record: {image.id}")
+    
+    # Associate with project if provided
+    if project_id:
+        from projects.models import Project, ProjectImage
+        try:
+            project = Project.objects.get(
+                id=project_id,
+                organization=ctx.organization
+            )
+            
+            ProjectImage.objects.create(
+                image=image,
+                project=project,
+                added_by=ctx.user,
+            )
+            
+            logger.info(f"Associated image {image.id} with project {project_id}")
+            
+        except Project.DoesNotExist:
+            logger.warning(f"Project {project_id} not found")
+    
+    # Add tags if provided
+    if tag_names:
+        for tag_name in tag_names:
+            tag, created = Tag.objects.get_or_create(
+                organization=ctx.organization,
+                name=tag_name
+            )
+            
+            ImageTag.objects.create(
+                image=image,
+                tag=tag,
+                tagged_by=ctx.user
+            )
+        
+        logger.info(f"Added {len(tag_names)} tags to image {image.id}")
+    
+    return {
+        "duplicate": False,
+        "image": image
+    }
+    
+@sync_to_async
+def get_dowload_url(image:Image, expiration:int=3600):
+    return image.get_download_url(expiration=expiration)
 
 @router.post(
     "/upload",
@@ -116,140 +275,35 @@ async def upload_image(
                 detail=f"File too large. Maximum size: {max_size / (1024*1024)}MB"
             )
         
-        # Calculate checksum
-        checksum = calculate_checksum(file_data)
+        # Parse tags
+        tag_names = [t.strip() for t in tags.split(',') if t.strip()] if tags else []
         
-        # Check for duplicate (same checksum in same organization)
-        existing = Image.objects.filter(
-            organization=ctx.organization,
-            checksum=checksum
-        ).first()
+        # Process upload in sync context
+        result = await process_image_upload(
+            ctx,
+            file_data,
+            file.filename,
+            file.content_type,
+            file_format,
+            name,
+            project_id,
+            tag_names,
+            source_of_origin,
+            storage_profile_id
+        )
         
-        if existing:
-            logger.warning(f"Duplicate image detected: {checksum}")
+        image = result["image"]
+        
+        if result["duplicate"]:
             return {
                 "message": "Image already exists",
-                "image_id": str(existing.id),
+                "image_id": str(image.id),
                 "duplicate": True
             }
         
-        # Get image dimensions
-        width, height = get_image_dimensions(file_data)
-        
-        if width == 0 or height == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to read image dimensions. File may be corrupted."
-            )
-        
-        # Get storage profile
-        if storage_profile_id:
-            try:
-                storage_profile = StorageProfile.objects.get(
-                    id=storage_profile_id,
-                    organization=ctx.organization,
-                    is_active=True
-                )
-            except StorageProfile.DoesNotExist:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Storage profile {storage_profile_id} not found"
-                )
-        else:
-            # Use default storage profile
-            storage_profile = StorageProfile.objects.filter(
-                organization=ctx.organization,
-                is_default=True,
-                is_active=True
-            ).first()
-            
-            if not storage_profile:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No default storage profile configured for organization"
-                )
-        
-        # Generate storage key
-        storage_key = generate_storage_key(
-            ctx.organization,
-            file.filename,
-            project_id
-        )
-        
-        # Upload to storage
-        adapter = get_storage_adapter_for_profile(storage_profile)
-        
-        adapter.upload_file(
-            BytesIO(file_data),
-            storage_key,
-            content_type=file.content_type or 'image/jpeg',
-            metadata={
-                'organization': ctx.organization.slug,
-                'uploaded_by': ctx.user.username,
-                'original_filename': file.filename
-            }
-        )
-        
-        logger.info(f"Uploaded file to storage: {storage_key}")
-        
-        # Create Image record
-        image = Image.objects.create(
-            organization=ctx.organization,
-            storage_profile=storage_profile,
-            storage_key=storage_key,
-            name=name or file.filename,
-            original_filename=file.filename,
-            file_format=file_format,
-            file_size=file_size,
-            width=width,
-            height=height,
-            checksum=checksum,
-            source_of_origin=source_of_origin or 'upload',
-            uploaded_by=ctx.user
-        )
-        
-        logger.info(f"Created image record: {image.id}")
-        
-        # Associate with project if provided
-        if project_id:
-            from projects.models import Project, ProjectImage
-            try:
-                project = Project.objects.get(
-                    id=project_id,
-                    organization=ctx.organization
-                )
-                
-                ProjectImage.objects.create(
-                    image=image,
-                    project=project,
-                    added_by=ctx.user,
-                )
-                
-                logger.info(f"Associated image {image.id} with project {project_id}")
-                
-            except Project.DoesNotExist:
-                logger.warning(f"Project {project_id} not found")
-        
-        # Add tags if provided
-        if tags:
-            tag_names = [t.strip() for t in tags.split(',') if t.strip()]
-            
-            for tag_name in tag_names:
-                tag, created = Tag.objects.get_or_create(
-                    organization=ctx.organization,
-                    name=tag_name
-                )
-                
-                ImageTag.objects.create(
-                    image=image,
-                    tag=tag,
-                    tagged_by=ctx.user
-                )
-            
-            logger.info(f"Added {len(tag_names)} tags to image {image.id}")
-        
         # Generate download URL
-        download_url = image.get_download_url(expiration=3600)
+        # download_url = image.get_download_url(expiration=3600)
+        download_url = await get_dowload_url(image, expiration=3600)
         
         return {
             "message": "Image uploaded successfully",
