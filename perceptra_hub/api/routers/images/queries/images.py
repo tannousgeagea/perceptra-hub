@@ -8,6 +8,7 @@ from uuid import UUID
 from datetime import datetime
 import hashlib
 import logging
+import uuid
 from io import BytesIO
 from PIL import Image as PILImage
 from asgiref.sync import sync_to_async
@@ -15,6 +16,7 @@ from asgiref.sync import sync_to_async
 import django
 django.setup()
 
+from django.db import models
 from api.dependencies import get_current_user, get_current_organization, RequestContext, get_request_context, bypass_auth_dev
 from storage.models import StorageProfile
 from storage.services import get_storage_adapter_for_profile, get_default_storage_adapter
@@ -83,6 +85,7 @@ def process_image_upload(
     content_type: Optional[str],
     file_format: str,
     name: Optional[str],
+    image_id: Optional[str],
     project_id: Optional[UUID],
     tag_names: List[str],
     source_of_origin: Optional[str],
@@ -145,6 +148,10 @@ def process_image_upload(
                 detail="No default storage profile configured for organization"
             )
     
+    if not image_id:
+        import uuid
+        image_id = str(uuid.uuid4())
+    
     # Generate storage key
     storage_key = generate_storage_key(
         ctx.organization,
@@ -174,6 +181,7 @@ def process_image_upload(
         storage_profile=storage_profile,
         storage_key=storage_key,
         name=name or filename,
+        image_id=image_id,
         original_filename=filename,
         file_format=file_format,
         file_size=file_size,
@@ -240,6 +248,7 @@ def get_dowload_url(image:Image, expiration:int=3600):
 async def upload_image(
     file: UploadFile = File(..., description="Image file to upload"),
     name: Optional[str] = Form(None, description="Human-readable name"),
+    image_id: Optional[str] = Form(None, description="Optional custom image ID (UUID format)"),  # ← ADD THIS
     project_id: Optional[UUID] = Form(None, description="Optional project ID"),
     tags: Optional[str] = Form(None, description="Comma-separated tag names"),
     source_of_origin: Optional[str] = Form(None, description="Source of image"),
@@ -263,6 +272,26 @@ async def upload_image(
                 detail=f"Unsupported file format: {file_format}. Allowed: {', '.join(allowed_formats)}"
             )
         
+        if image_id:
+            # Validate UUID format
+            try:
+                uuid.UUID(image_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid image_id format. Must be a valid UUID."
+                )
+            
+            # Check if image_id already exists
+            if await sync_to_async(Image.objects.filter(
+                organization=ctx.organization,
+                image_id=image_id
+            ).exists)():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Image with image_id '{image_id}' already exists"
+                )
+        
         # Read file data
         file_data = await file.read()
         file_size = len(file_data)
@@ -280,16 +309,17 @@ async def upload_image(
         
         # Process upload in sync context
         result = await process_image_upload(
-            ctx,
-            file_data,
-            file.filename,
-            file.content_type,
-            file_format,
-            name,
-            project_id,
-            tag_names,
-            source_of_origin,
-            storage_profile_id
+            ctx=ctx,
+            file_data=file_data,
+            filename=file.filename,
+            content_type=file.content_type,
+            file_format=file_format,
+            name=name,
+            image_id=image_id,
+            project_id=project_id,
+            tag_names=tag_names,
+            source_of_origin=source_of_origin,
+            storage_profile_id=storage_profile_id
         )
         
         image = result["image"]
@@ -307,7 +337,7 @@ async def upload_image(
         
         return {
             "message": "Image uploaded successfully",
-            "image_id": str(image.id),
+            "image_id": str(image.image_id),
             "name": image.name,
             "storage_key": image.storage_key,
             "file_size": image.file_size,
@@ -415,50 +445,69 @@ async def list_images(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     project_id: Optional[UUID] = Query(None),
-    annotated: Optional[bool] = Query(None),
-    processed: Optional[bool] = Query(None),
     tag: Optional[str] = Query(None),
     search: Optional[str] = Query(None)
 ):
     """List images with optional filtering."""
+    @sync_to_async
+    def get_images_list(
+        organization: Organization,
+        skip: int,
+        limit: int,
+        project_id: Optional[UUID],
+        tag: Optional[str],
+        search: Optional[str]
+    ):
+        """
+        Synchronous function to get images list.
+        """
+        queryset = Image.objects.filter(organization=organization)
+        
+        # Filter by project (through ProjectImage relationship)
+        if project_id:
+            queryset = queryset.filter(project_images__project_id=project_id)
+        
+        # Filter by tag
+        if tag:
+            queryset = queryset.filter(tags__name=tag)
+        
+        # Search by name or original_filename
+        if search:
+            queryset = queryset.filter(
+                models.Q(name__icontains=search) | 
+                models.Q(original_filename__icontains=search)
+            )
+        
+        # Get total count
+        total = queryset.distinct().count()
+        
+        # Get paginated results
+        images = list(
+            queryset.select_related(
+                'storage_profile',
+                'uploaded_by'
+            ).prefetch_related('tags').distinct()[skip:skip + limit]
+        )
+        
+        return {
+            "total": total,
+            "images": images,
+            "skip": skip,
+            "limit": limit
+        }
     
-    queryset = Image.objects.filter(organization=ctx.organization)
-    
-    # Filter by project
-    if project_id:
-        queryset = queryset.filter(project_associations__project_id=project_id)
-    
-    # Filter by status
-    if annotated is not None:
-        queryset = queryset.filter(annotated=annotated)
-    if processed is not None:
-        queryset = queryset.filter(processed=processed)
-    
-    # Filter by tag
-    if tag:
-        queryset = queryset.filter(tags__name=tag)
-    
-    # Search by name
-    if search:
-        queryset = queryset.filter(name__icontains=search)
-    
-    # Get total count
-    total = queryset.count()
-    
-    # Get paginated results
-    images = queryset.select_related(
-        'storage_profile',
-        'uploaded_by',
-        'project'
-    ).prefetch_related('tags')[skip:skip + limit]
+    result = await get_images_list(
+        ctx.organization, skip, limit, project_id, tag, search
+    )
     
     return {
-        "total": total,
-        "page": (skip // limit) + 1,
-        "page_size": limit,
+        "total": result["total"],
+        "page": (result["skip"] // result["limit"]) + 1,
+        "page_size": result["limit"],
         "images": [
             {
                 "id": str(img.id),
+                "image_id": img.image_id,
                 "name": img.name,
                 "original_filename": img.original_filename,
                 "file_format": img.file_format,
@@ -468,22 +517,23 @@ async def list_images(
                 "height": img.height,
                 "aspect_ratio": round(img.aspect_ratio, 2),
                 "megapixels": round(img.megapixels, 2),
-                "annotated": img.annotated,
-                "processed": img.processed,
                 "storage_profile": {
                     "id": str(img.storage_profile.id),
                     "name": img.storage_profile.name,
                     "backend": img.storage_profile.backend
                 },
+                "storage_key": img.storage_key,
+                "checksum": img.checksum,
+                "source_of_origin": img.source_of_origin,
                 "tags": [tag.name for tag in img.tags.all()],
                 "uploaded_by": img.uploaded_by.username if img.uploaded_by else None,
                 "created_at": img.created_at.isoformat(),
-                "download_url": img.get_download_url()
+                "updated_at": img.updated_at.isoformat(),
+                "download_url": await get_dowload_url(img, expiration=3600)
             }
-            for img in images
+            for img in result["images"]
         ]
     }
-
 
 @router.get(
     "/{image_id}",
