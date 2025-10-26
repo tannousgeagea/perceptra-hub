@@ -153,7 +153,7 @@ def authenticate_user(credentials: UserLogin):
     
     organizations = [
         {
-            "id": str(m.organization.id),
+            "id": str(m.organization.org_id),
             "name": m.organization.name,
             "slug": m.organization.slug,
             "role": m.role.name

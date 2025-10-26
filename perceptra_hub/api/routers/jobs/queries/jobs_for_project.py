@@ -9,10 +9,9 @@ from jobs.models import Job
 from fastapi.routing import APIRoute
 from fastapi import Request, Response
 from typing import Callable, Optional
-from api.routers.auth.queries.dependencies import (
-    user_project_access_dependency,
-    project_edit_admin_or_org_admin_dependency,
-    project_admin_or_org_admin_dependency,
+from api.dependencies import (
+    RequestContext,
+    get_request_context
 )
 
 class TimedRoute(APIRoute):
@@ -57,14 +56,17 @@ class JobOut(BaseModel):
     updatedAt: str
     progress: JobProgressOut   # 👈 new field
 
-@router.get("/projects/{project_id}/jobs", response_model=List[JobOut])
+@router.get("/jobs/project/{project_id}", response_model=List[JobOut])
 def get_jobs_for_project(
     project_id: str,
-    _user=Depends(project_edit_admin_or_org_admin_dependency),
+    ctx:RequestContext=Depends(get_request_context),
 ):
     try:
         jobs = (
-            Job.objects.filter(project__name=project_id)
+            Job.objects.filter(
+                project__project_id=project_id,
+                project__organization=ctx.organization
+            )
                 .select_related("assignee")
                 .annotate(
                     total=Count("images"),

@@ -40,7 +40,7 @@ class ProjectMembership(models.Model):
     organization = models.ForeignKey(
         Organization, on_delete=models.SET_NULL, null=True, blank=True, related_name="memberships"
     )
-    created_at = models.DateTimeField(auto_now_add=True)
+    joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ("user", "project")

@@ -15,6 +15,8 @@ import os
 from projects.models import Project, ProjectType, Visibility 
 from annotations.models import AnnotationGroup, AnnotationClass
 from organizations.models import Organization
+from memberships.models import ProjectMembership, Role
+from api.dependencies import get_request_context, RequestContext
 
 class TimedRoute(APIRoute):
     def get_route_handler(self) -> Callable:
@@ -76,7 +78,6 @@ class ProjectCreate(BaseModel):
     thumbnail_url: Optional[str] = None
     project_type_name: str = Field(..., description="Must be one of: object-detection, classification, segmentation")
     visibility_name: str = Field(..., description="Must be one of: private, public")
-    organization_id: Optional[int] = None
     annotation_groups: List[AnnotationGroupCreate] = Field(default_factory=list)
 
 class ProjectResponse(BaseModel):
@@ -201,25 +202,78 @@ async def validate_organization(organization_id: Optional[int]):
             detail=f"Organization with id {organization_id} does not exist"
         )
 
+
+@sync_to_async
+def create_project_with_membership(ctx: RequestContext, project_data: ProjectCreate, project_type, visibility):
+    """Create project with initial membership for creator."""
+    with transaction.atomic():
+        # Create the project
+        project = Project.objects.create(
+            name=project_data.name,
+            description=project_data.description,
+            thumbnail_url=project_data.thumbnail_url,
+            project_type=project_type,
+            visibility=visibility,
+            organization=ctx.organization,
+            created_by=ctx.user,
+            updated_by=ctx.user
+        )
+        
+        # Create project membership for creator (admin role)
+        admin_role = Role.objects.get(name='admin')
+        ProjectMembership.objects.create(
+            project=project,
+            user=ctx.user,
+            role=admin_role
+        )
+        
+        # Create annotation groups and classes
+        created_groups = []
+        for group_data in project_data.annotation_groups:
+            annotation_group = AnnotationGroup.objects.create(
+                project=project,
+                name=group_data.name,
+                description=group_data.description
+            )
+            
+            created_classes = []
+            for class_data in group_data.classes:
+                annotation_class = AnnotationClass.objects.create(
+                    annotation_group=annotation_group,
+                    class_id=class_data.class_id,
+                    name=class_data.name,
+                    color=class_data.color,
+                    description=class_data.description
+                )
+                created_classes.append(annotation_class)
+            
+            annotation_group.created_classes = created_classes
+            created_groups.append(annotation_group)
+        
+        return project, created_groups
+
 @router.post("/projects/add", response_model=ProjectResponse, status_code=201)
-async def create_project(project_data: ProjectCreate):
+async def create_project(
+    project_data: ProjectCreate,
+    ctx: RequestContext = Depends(get_request_context)
+):
     """
-    Create a new project with annotation groups and classes.
+    Create a new project with annotation groups.
     
-    - **name**: Unique project name
-    - **project_type_name**: Must be one of the existing project types
-    - **visibility_name**: Must be one of the existing visibility options
-    - **annotation_groups**: List of annotation groups with their classes
+    Requires admin or owner role in the organization.
+    Creator automatically becomes project admin.
     """
     try:
+        # Require admin/owner role
+        ctx.require_role('admin', 'owner')
+        
         # Validate dependencies
         project_type = await validate_project_type(project_data.project_type_name)
         visibility = await validate_visibility(project_data.visibility_name)
-        organization = await validate_organization(project_data.organization_id)
         
         # Create project with annotation groups
-        project, created_groups = await create_project_with_groups(
-            project_data, project_type, visibility, organization
+        project, created_groups = await create_project_with_membership(
+            ctx, project_data, project_type, visibility
         )
         
         # Prepare response
@@ -261,62 +315,66 @@ async def create_project(project_data: ProjectCreate):
             annotation_groups=response_groups
         )
         
+    except HTTPException:
+        raise
+    except ObjectDoesNotExist as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.get("/projects/{project_id}", response_model=ProjectResponse)
-async def get_project(project_id: int):
-    """Get a project by ID with all its annotation groups and classes."""
-    try:
-        project = await get_project_by_id(project_id)
+# @router.get("/projects/{project_id}", response_model=ProjectResponse)
+# async def get_project(project_id: int):
+#     """Get a project by ID with all its annotation groups and classes."""
+#     try:
+#         project = await get_project_by_id(project_id)
         
-        # Get annotation groups with their classes
-        annotation_groups = await get_annotation_groups_for_project(project)
+#         # Get annotation groups with their classes
+#         annotation_groups = await get_annotation_groups_for_project(project)
         
-        response_groups = []
-        for group in annotation_groups:
-            group_classes = [
-                AnnotationClassResponse(
-                    id=cls.id,
-                    class_id=cls.class_id,
-                    name=cls.name,
-                    color=cls.color,
-                    description=cls.description,
-                    created_at=cls.created_at.isoformat()
-                )
-                for cls in group.classes.all()
-            ]
+#         response_groups = []
+#         for group in annotation_groups:
+#             group_classes = [
+#                 AnnotationClassResponse(
+#                     id=cls.id,
+#                     class_id=cls.class_id,
+#                     name=cls.name,
+#                     color=cls.color,
+#                     description=cls.description,
+#                     created_at=cls.created_at.isoformat()
+#                 )
+#                 for cls in group.classes.all()
+#             ]
             
-            response_groups.append(
-                AnnotationGroupResponse(
-                    id=group.id,
-                    name=group.name,
-                    description=group.description,
-                    created_at=group.created_at.isoformat(),
-                    classes=group_classes
-                )
-            )
+#             response_groups.append(
+#                 AnnotationGroupResponse(
+#                     id=group.id,
+#                     name=group.name,
+#                     description=group.description,
+#                     created_at=group.created_at.isoformat(),
+#                     classes=group_classes
+#                 )
+#             )
         
-        return ProjectResponse(
-            id=project.id,
-            name=project.name,
-            description=project.description,
-            thumbnail_url=project.thumbnail_url,
-            project_type_name=project.project_type.name,
-            visibility_name=project.visibility.name,
-            organization_id=project.organization.id if project.organization else None,
-            created_at=project.created_at.isoformat(),
-            last_edited=project.last_edited.isoformat(),
-            is_active=project.is_active,
-            annotation_groups=response_groups
-        )
+#         return ProjectResponse(
+#             id=project.id,
+#             name=project.name,
+#             description=project.description,
+#             thumbnail_url=project.thumbnail_url,
+#             project_type_name=project.project_type.name,
+#             visibility_name=project.visibility.name,
+#             organization_id=project.organization.id if project.organization else None,
+#             created_at=project.created_at.isoformat(),
+#             last_edited=project.last_edited.isoformat(),
+#             is_active=project.is_active,
+#             annotation_groups=response_groups
+#         )
         
-    except ObjectDoesNotExist:
-        raise HTTPException(status_code=404, detail=f"Project with id {project_id} not found")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+#     except ObjectDoesNotExist:
+#         raise HTTPException(status_code=404, detail=f"Project with id {project_id} not found")
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/project-types/")
 async def get_project_types():

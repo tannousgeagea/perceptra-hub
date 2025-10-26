@@ -3,11 +3,17 @@ import time
 from fastapi import Request, Response
 from fastapi.routing import APIRoute
 from typing import Callable
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from django.core.exceptions import ObjectDoesNotExist
 from projects.models import Project, ProjectImage
 from pydantic import BaseModel
 from typing import Optional
+from uuid import UUID
+from asgiref.sync import sync_to_async
+from api.dependencies import (
+    ProjectContext,
+    get_project_context,
+)
 
 class TimedRoute(APIRoute):
     def get_route_handler(self) -> Callable:
@@ -39,24 +45,26 @@ class ProjectDetailResponse(BaseModel):
     created_at: str
     is_active: bool
 
-@router.get("/projects/{project_id}", response_model=ProjectDetailResponse)
-def get_project_detail(project_id: str):
-    """
-    Fetch project details by project_id.
-    """
-    try:
-        project = Project.objects.select_related("project_type", "visibility").get(name=project_id)
-    except ObjectDoesNotExist:
-        raise HTTPException(status_code=404, detail="Project not found.")
-
+@sync_to_async
+def fetch_project_details(project):
     return ProjectDetailResponse(
         id=project.id,
         name=project.name,
         description=project.description,
-        thumbnail_url=ProjectImage.objects.filter(project=project).first().image.image_file.url if ProjectImage.objects.filter(project=project).exists() else None,
+        thumbnail_url=project.thumbnail_url,
         project_type=project.project_type.name if project.project_type else None,
         last_edited=project.last_edited.isoformat(),
         visibility=project.visibility.name if project.visibility else "Unknown",
         created_at=project.created_at.isoformat(),
         is_active=project.is_active,
     )
+
+@router.get("/projects/{project_id}", response_model=ProjectDetailResponse)
+async def get_project_detail(
+    project_id: UUID,
+    project_ctx: ProjectContext = Depends(get_project_context)
+    ):
+    """
+    Fetch project details by project_id.
+    """
+    return await fetch_project_details(project_ctx.project)

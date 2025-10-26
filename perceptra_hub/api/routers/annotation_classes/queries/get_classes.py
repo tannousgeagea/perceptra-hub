@@ -56,7 +56,7 @@ def get_classes(
 ) -> List[AnnotationClassOut]:
     results = []
     try:
-        project = Project.objects.filter(name=project_id).first()
+        project = Project.objects.filter(project_id=project_id).first()
         if not project:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

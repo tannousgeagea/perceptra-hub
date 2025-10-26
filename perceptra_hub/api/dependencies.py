@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, status, Header, Request
 from typing import Optional, Generator
 import logging
 import jwt
+from uuid import UUID
 from datetime import datetime
 
 # Django imports
@@ -12,8 +13,9 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.conf import settings
 
+from projects.models import Project
 from organizations.models import Organization
-from memberships.models import OrganizationMembership, Role
+from memberships.models import OrganizationMembership, Role, ProjectMembership
 from asgiref.sync import sync_to_async
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -514,6 +516,146 @@ async def get_request_context(
     """
     return RequestContext(user, organization, role)
 
+
+# ============= Project Context =============
+
+class ProjectContext:
+    """Project context with user, organization, role, and project."""
+    
+    def __init__(
+        self,
+        user: User,
+        organization: Organization,
+        org_role: Role,
+        project: Project,
+        project_role: Optional[Role] = None
+    ):
+        self.user = user
+        self.organization = organization
+        self.org_role = org_role
+        self.project = project
+        self.project_role = project_role
+    
+    def has_org_role(self, *role_names: str) -> bool:
+        """Check if user has any of the specified organization roles."""
+        return self.org_role and self.org_role.name in role_names
+    
+    def has_project_role(self, *role_names: str) -> bool:
+        """Check if user has any of the specified project roles."""
+        return self.project_role and self.project_role.name in role_names
+    
+    def is_org_admin(self) -> bool:
+        """Check if user is organization admin/owner."""
+        return self.has_org_role('admin', 'owner')
+    
+    def is_project_member(self) -> bool:
+        """Check if user is a project member."""
+        return self.project_role is not None
+    
+    def require_org_role(self, *role_names: str):
+        """Raise exception if user doesn't have required organization role."""
+        if not self.has_org_role(*role_names):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Required organization roles: {', '.join(role_names)}"
+            )
+    
+    def require_project_role(self, *role_names: str):
+        """Raise exception if user doesn't have required project role."""
+        if not self.has_project_role(*role_names):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Required project roles: {', '.join(role_names)}"
+            )
+    
+    def require_project_access(self):
+        """Require user to be org admin or project member."""
+        if not self.is_org_admin() and not self.is_project_member():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You must be an organization admin or project member."
+            )
+
+
+@sync_to_async
+def fetch_project_with_access_check(
+    user: User,
+    organization: Organization,
+    org_role: Role,
+    project_id: UUID
+) -> tuple[Project, Optional[Role]]:
+    """
+    Fetch project and check user access.
+    Returns project and user's project role (None if only org admin).
+    """
+    from projects.models import Project
+    
+    # Get project
+    try:
+        project = Project.objects.select_related('organization').get(
+            project_id=project_id,
+            organization=organization,
+            is_deleted=False
+        )
+    except Project.DoesNotExist:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found"
+        )
+    
+    # Check if user is org admin/owner (automatic access)
+    if org_role.name in ['admin', 'owner']:
+        return project, None  # Org admins don't need project role
+    
+    # Check if user is project member
+    try:
+        membership = ProjectMembership.objects.select_related('role').get(
+            user=user,
+            project=project
+        )
+        return project, membership.role
+    except ProjectMembership.DoesNotExist:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. You must be an organization admin or project member."
+        )
+
+
+async def get_project_context(
+    project_id: UUID,
+    ctx: RequestContext = Depends(get_request_context)
+) -> ProjectContext:
+    """
+    Get complete project context with user, organization, and project.
+    
+    Automatically checks if user has access to the project:
+    - Organization admin/owner: automatic access
+    - Project member: access granted
+    - Others: 403 Forbidden
+    
+    Usage:
+        @router.get("/projects/{project_id}/members")
+        async def get_members(
+            project_ctx: ProjectContext = Depends(get_project_context)
+        ):
+            # project_ctx.project, project_ctx.user, etc. available
+            project_ctx.require_project_access()
+            ...
+    """
+    project, project_role = await fetch_project_with_access_check(
+        ctx.user,
+        ctx.organization,
+        ctx.role,
+        project_id
+    )
+    
+    return ProjectContext(
+        user=ctx.user,
+        organization=ctx.organization,
+        org_role=ctx.role,
+        project=project,
+        project_role=project_role
+    )
 
 # ============= Usage Examples in Docstring =============
 
