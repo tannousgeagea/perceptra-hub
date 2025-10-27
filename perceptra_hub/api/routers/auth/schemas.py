@@ -154,6 +154,7 @@ class UserProfile(BaseModel):
     is_active: bool
     date_joined: datetime
     last_login: Optional[datetime]
+    avatar: Optional[str] = None
     organizations: List[dict]
     
     class Config:

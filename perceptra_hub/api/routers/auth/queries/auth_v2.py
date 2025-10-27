@@ -64,7 +64,7 @@ def register_new_user(user_data: UserRegister):
         email=user_data.email,
         password=user_data.password,
         first_name=user_data.first_name,
-        last_name=user_data.last_name
+        last_name=user_data.last_name,
     )
     
     # Create tokens
@@ -228,7 +228,7 @@ def refresh_user_tokens(user_id: str):
     
     organizations = [
         {
-            "id": str(m.organization.id),
+            "id": str(m.organization.org_id),
             "name": m.organization.name,
             "slug": m.organization.slug,
             "role": m.role.name
@@ -319,7 +319,7 @@ def get_user_profile_data(user: User):
     
     organizations = [
         OrganizationInfo(
-            id=str(m.organization.id),
+            id=str(m.organization.org_id),
             name=m.organization.name,
             slug=m.organization.slug,
             role=m.role.name,
@@ -383,7 +383,7 @@ def update_user_profile_data(user: User, profile_data: UserProfileUpdate):
     
     organizations = [
         {
-            "id": str(m.organization.id),
+            "id": str(m.organization.org_id),
             "name": m.organization.name,
             "slug": m.organization.slug,
             "role": m.role.name

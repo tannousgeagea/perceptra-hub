@@ -23,11 +23,29 @@ class OrganizationMembership(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="members")
     joined_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('active', 'Active'),
+            ('inactive', 'Inactive'),
+            ('pending', 'Pending'),
+            ('suspended', 'Suspended'),
+        ],
+        default='active',
+        db_index=True,
+        help_text="Membership status in this organization"
+    )
+    
     
     class Meta:
         unique_together = ("user", "organization")
         db_table = "organization_membership"
         verbose_name_plural = "Organization Memberships"
+        indexes = [
+            models.Index(fields=['user', 'organization']),
+            models.Index(fields=['organization', 'role']),
+            models.Index(fields=['organization', 'status']),  # ADD THIS
+        ]
 
     def __str__(self):
         return f"{self.user.username} → {self.organization.name} ({self.role.name})"
