@@ -22,7 +22,18 @@ class OrganizationMembership(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="members")
+    
+    updated_at = models.DateTimeField(auto_now=True)
+    
     joined_at = models.DateTimeField(auto_now_add=True)
+    invited_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='organization_invitations_sent'
+    )    
+
     status = models.CharField(
         max_length=20,
         choices=[
@@ -48,8 +59,10 @@ class OrganizationMembership(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.user.username} → {self.organization.name} ({self.role.name})"
-
+        return f"{self.user.get_full_name() or self.user.username} - {self.organization.name} ({self.role})"
+    
+    def __repr__(self):
+        return f"<OrganizationMember: {self.user.username}@{self.organization.slug}>"
 
 class ProjectMembership(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="project_memberships")
