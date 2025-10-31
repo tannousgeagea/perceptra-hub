@@ -15,6 +15,8 @@ from api.dependencies import (
     get_project_context,
 )
 
+from api.routers.projects.schemas import ProjectResponse
+
 class TimedRoute(APIRoute):
     def get_route_handler(self) -> Callable:
         original_route_handler = super().get_route_handler()
@@ -47,19 +49,21 @@ class ProjectDetailResponse(BaseModel):
 
 @sync_to_async
 def fetch_project_details(project):
-    return ProjectDetailResponse(
-        id=project.id,
+    return ProjectResponse(
+        id=str(project.id),
+        project_id=str(project.project_id),
         name=project.name,
         description=project.description,
-        thumbnail_url=project.thumbnail_url,
-        project_type=project.project_type.name if project.project_type else None,
-        last_edited=project.last_edited.isoformat(),
-        visibility=project.visibility.name if project.visibility else "Unknown",
-        created_at=project.created_at.isoformat(),
+        project_type={"id": project.project_type.id, "name": project.project_type.name},
+        visibility={"id": project.visibility.id, "name": project.visibility.name},
         is_active=project.is_active,
+        is_deleted=project.is_deleted,
+        created_at=project.created_at.isoformat(),
+        updated_at=project.updated_at.isoformat(),
+        last_edited=project.last_edited.isoformat()
     )
 
-@router.get("/projects/{project_id}", response_model=ProjectDetailResponse)
+@router.get("/projects/{project_id}", response_model=ProjectResponse)
 async def get_project_detail(
     project_id: UUID,
     project_ctx: ProjectContext = Depends(get_project_context)

@@ -17,12 +17,15 @@ import django
 django.setup()
 
 from django.db import models
+
 from api.dependencies import get_current_user, get_current_organization, RequestContext, get_request_context, bypass_auth_dev
 from storage.models import StorageProfile
 from storage.services import get_storage_adapter_for_profile, get_default_storage_adapter
 from images.models import Image, Tag, ImageTag
 from organizations.models import Organization
 from django.contrib.auth import get_user_model
+from common_utils.image.utils import parse_search_query, apply_image_filters
+from common_utils.jobs.utils import assign_uploaded_image_to_batch
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -89,7 +92,8 @@ def process_image_upload(
     project_id: Optional[UUID],
     tag_names: List[str],
     source_of_origin: Optional[str],
-    storage_profile_id: Optional[UUID]
+    storage_profile_id: Optional[UUID],
+    batch_id: Optional[str] = Query(None),
 ):
     """
     Synchronous function to process image upload.
@@ -193,24 +197,35 @@ def process_image_upload(
     )
     
     logger.info(f"Created image record: {image.id}")
-    
     # Associate with project if provided
     if project_id:
         from projects.models import Project, ProjectImage
         try:
             project = Project.objects.get(
-                id=project_id,
+                project_id=project_id,
                 organization=ctx.organization
             )
             
-            ProjectImage.objects.create(
+            project_image, pi_created = ProjectImage.objects.get_or_create(
                 image=image,
                 project=project,
-                added_by=ctx.user,
+                defaults={
+                    'added_by': ctx.user,
+                    'job_assignment_status': 'waiting'
+                }
             )
             
-            logger.info(f"Associated image {image.id} with project {project_id}")
-            
+            if pi_created:
+                logger.info(f"Associated image {image.id} with project {project_id}")
+                
+                # Use existing utility to assign to job (respects 50 image limit)
+                assigned_job = assign_uploaded_image_to_batch(
+                    project_image=project_image,
+                    batch_id=batch_id,
+                )
+                
+                if assigned_job:
+                    logger.info(f"Auto-assigned image to job {assigned_job.id}")
         except Project.DoesNotExist:
             logger.warning(f"Project {project_id} not found")
     
@@ -445,18 +460,45 @@ async def list_images(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     project_id: Optional[UUID] = Query(None),
+    q: Optional[str] = Query(
+        None,
+        description="Search query (e.g., 'tag:car min-width:1920 class:vehicle')",
+        alias="q"
+    ),
     tag: Optional[str] = Query(None),
     search: Optional[str] = Query(None)
 ):
-    """List images with optional filtering."""
+    """
+    List images with advanced filtering.
+    
+    **Query Syntax:**
+    - `tag:name` - Filter by tag
+    - `class:name` - Filter by annotation class
+    - `split:train|val|test` - Filter by dataset split
+    - `filename:text` - Filter by filename
+    - `min-width:1920` - Minimum width
+    - `max-width:1920` - Maximum width
+    - `min-height:1080` - Minimum height
+    - `max-height:1080` - Maximum height
+    - `min-annotations:5` - Minimum annotation count
+    - `max-annotations:10` - Maximum annotation count
+    - `job:job-name` - Filter by annotation job
+    - `sort:size|name|date|width|height|annotations` - Sort results
+    
+    **Examples:**
+    - `tag:car tag:red min-width:1920`
+    - `class:vehicle split:train filename:IMG`
+    - `min-annotations:5 sort:size`
+    """
     @sync_to_async
     def get_images_list(
         organization: Organization,
         skip: int,
         limit: int,
         project_id: Optional[UUID],
-        tag: Optional[str],
-        search: Optional[str]
+        query: Optional[str],
+        legacy_tag: Optional[str],
+        legacy_search: Optional[str]
     ):
         """
         Synchronous function to get images list.
@@ -467,16 +509,23 @@ async def list_images(
         if project_id:
             queryset = queryset.filter(project_images__project_id=project_id)
         
-        # Filter by tag
-        if tag:
-            queryset = queryset.filter(tags__name=tag)
-        
-        # Search by name or original_filename
-        if search:
-            queryset = queryset.filter(
-                models.Q(name__icontains=search) | 
-                models.Q(original_filename__icontains=search)
-            )
+        # Parse and apply query filters
+        if query:
+            filters = parse_search_query(query)
+            queryset = apply_image_filters(queryset, filters)
+        else:
+            # Legacy filters for backwards compatibility
+            if legacy_tag:
+                queryset = queryset.filter(tags__name=legacy_tag)
+            
+            if legacy_search:
+                queryset = queryset.filter(
+                    models.Q(name__icontains=legacy_search) |
+                    models.Q(original_filename__icontains=legacy_search)
+                )
+            
+            # Default sort
+            queryset = queryset.order_by('-created_at')
         
         # Get total count
         total = queryset.distinct().count()
@@ -497,7 +546,13 @@ async def list_images(
         }
     
     result = await get_images_list(
-        ctx.organization, skip, limit, project_id, tag, search
+        ctx.organization,
+        skip,
+        limit,
+        project_id,
+        q,
+        tag,
+        search
     )
     
     return {

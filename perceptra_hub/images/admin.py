@@ -31,7 +31,7 @@ class ImageAdmin(ModelAdmin):
         'storage_profile',
         'uploaded_by',
         'created_at',
-        'actions_display'
+        'actions_display',
     ]
     
     list_filter = [

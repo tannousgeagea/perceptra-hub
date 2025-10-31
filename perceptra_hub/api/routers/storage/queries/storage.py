@@ -221,6 +221,12 @@ def create_storage_profile_record(organization: Organization, profile_data: Stor
             detail=f"Storage connection test failed: {error}"
         )
     
+    if profile_data.is_default:
+        StorageProfile.objects.filter(
+            organization=organization,
+            is_default=True
+        ).update(is_default=False)
+    
     # Save profile
     profile.save()
     
@@ -359,6 +365,11 @@ async def update_storage_profile(
             if profile_data.region is not None:
                 profile.region = profile_data.region
             if profile_data.is_default is not None:
+                if profile_data.is_default:
+                    StorageProfile.objects.filter(
+                        organization=organization,
+                        is_default=True
+                    ).exclude(pk=profile.pk).update(is_default=False)
                 profile.is_default = profile_data.is_default
             if profile_data.is_active is not None:
                 profile.is_active = profile_data.is_active
