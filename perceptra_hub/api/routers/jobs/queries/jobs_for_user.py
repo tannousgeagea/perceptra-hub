@@ -9,10 +9,10 @@ from jobs.models import Job
 from fastapi.routing import APIRoute
 from fastapi import Request, Response
 from typing import Callable, Optional
-from api.routers.auth.queries.dependencies import (
-    user_project_access_dependency,
-    project_admin_or_org_admin_dependency,
-    get_current_user
+from api.dependencies import (
+    get_current_user,
+    RequestContext,
+    get_request_context,
 )
 
 class TimedRoute(APIRoute):
@@ -51,11 +51,18 @@ class JobOut(BaseModel):
     updatedAt: str
     projectId: str
 
-@router.get("/jobs/my-assigned", response_model=List[JobOut])
+@router.get("/jobs/me", response_model=List[JobOut])
 def get_jobs_for_user(
-    user=Depends(get_current_user),
+    ctx:RequestContext=Depends(get_request_context),
 ):
-    jobs = Job.objects.filter(assignee=user).exclude(status="completed").order_by("-created_at")
+    jobs = Job.objects.filter(
+        assignee=ctx.user,
+        project__organization=ctx.organization,
+        ).exclude(
+            status="completed"
+            ).order_by(
+                "-created_at"
+            )
 
     return [
         JobOut(

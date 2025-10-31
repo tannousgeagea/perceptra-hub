@@ -81,7 +81,7 @@ RUN pip3 install psycopg2-binary
 RUN pip3 install python-jose
 RUN pip3 install zipstream
 RUN pip3 install albumentations
-RUN pip3 install perceptra-storage[all]
+RUN pip3 install perceptra-storage[all]==0.1.2
 RUN pip3 install pyjwt
 
 # upgrade everything

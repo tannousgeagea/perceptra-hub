@@ -22,16 +22,47 @@ class OrganizationMembership(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="members")
+    
+    updated_at = models.DateTimeField(auto_now=True)
+    
     joined_at = models.DateTimeField(auto_now_add=True)
+    invited_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='organization_invitations_sent'
+    )    
+
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('active', 'Active'),
+            ('inactive', 'Inactive'),
+            ('pending', 'Pending'),
+            ('suspended', 'Suspended'),
+        ],
+        default='active',
+        db_index=True,
+        help_text="Membership status in this organization"
+    )
+    
     
     class Meta:
         unique_together = ("user", "organization")
         db_table = "organization_membership"
         verbose_name_plural = "Organization Memberships"
+        indexes = [
+            models.Index(fields=['user', 'organization']),
+            models.Index(fields=['organization', 'role']),
+            models.Index(fields=['organization', 'status']),  # ADD THIS
+        ]
 
     def __str__(self):
-        return f"{self.user.username} → {self.organization.name} ({self.role.name})"
-
+        return f"{self.user.get_full_name() or self.user.username} - {self.organization.name} ({self.role})"
+    
+    def __repr__(self):
+        return f"<OrganizationMember: {self.user.username}@{self.organization.slug}>"
 
 class ProjectMembership(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="project_memberships")
@@ -40,7 +71,7 @@ class ProjectMembership(models.Model):
     organization = models.ForeignKey(
         Organization, on_delete=models.SET_NULL, null=True, blank=True, related_name="memberships"
     )
-    created_at = models.DateTimeField(auto_now_add=True)
+    joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ("user", "project")

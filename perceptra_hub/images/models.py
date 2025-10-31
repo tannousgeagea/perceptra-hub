@@ -65,7 +65,7 @@ class Image(models.Model):
         help_text=_('Image height in pixels')
     )
     
-    image_name = models.CharField(max_length=255, unique=True)
+    image_name = models.CharField(max_length=255)
     image_file = models.ImageField(upload_to='images/')
     
     # Origin tracking

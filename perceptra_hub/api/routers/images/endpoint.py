@@ -13,6 +13,7 @@ QUERIES_DIR = os.path.dirname(__file__) + "/queries"
 QUERIES = [
     f"api.routers.images.queries.{f.replace('/', '.')[:-3]}" 
     for f in os.listdir(QUERIES_DIR) 
+    if not os.path.isdir(f)
     if f.endswith('.py') 
     if not f.endswith('__.py')
     ]

@@ -17,6 +17,6 @@ class OrganizationMembershipAdmin(ModelAdmin):
 
 @admin.register(ProjectMembership)
 class ProjectMembershipAdmin(ModelAdmin):
-    list_display = ("id", "user", "project", "role", "organization", "created_at")
+    list_display = ("id", "user", "project", "role", "organization", "joined_at")
     list_filter = ("organization", "role")
     search_fields = ("user__username", "project__name")
