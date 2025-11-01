@@ -3,7 +3,7 @@ import os
 import time
 import django
 django.setup()
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi import FastAPI, HTTPException, status
 from fastapi import Request, Response
 from pydantic import BaseModel
@@ -11,7 +11,12 @@ from fastapi.routing import APIRoute
 from typing import Callable, Optional
 from typing import List, Optional
 import datetime
+from uuid import UUID
 from fastapi import status as http_status
+from api.dependencies import ProjectContext, get_project_context
+from asgiref.sync import sync_to_async
+
+from api.routers.classes.schemas import AnnotationClassOut
 
 # Import your Django models.
 from annotations.models import (
@@ -38,32 +43,27 @@ class TimedRoute(APIRoute):
         return custom_route_handler
 
 
-class AnnotationClassOut(BaseModel):
-    id: int
-    classId: int
-    name: str
-    color: str
-    count: int
-
 router = APIRouter(
+    prefix="/projects",
     route_class=TimedRoute,
 )
-@router.api_route(
-    "/classes", methods=["GET"], tags=["Annotation Classes"])
-def get_classes(
+
+@router.get(
+    "/{project_id}/classes",
+    response_model=List[AnnotationClassOut],
+    summary="List Annotation Classes for Project",
+    description="Retrieve all annotation classes linked to a given project, including the count of active annotations per class.", 
+)
+async def get_classes(
     response:Response,
-    project_id:str,
-) -> List[AnnotationClassOut]:
+    project_id:UUID,
+    project_ctx: ProjectContext = Depends(get_project_context),
+):
     results = []
-    try:
-        project = Project.objects.filter(project_id=project_id).first()
-        if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Project with ID {project_id} not found."
-            )
-        
-        annotation_group = AnnotationGroup.objects.filter(project=project).first()
+    
+    @sync_to_async
+    def get_annotation_classes(project:Project):
+        annotation_group = AnnotationGroup.objects.filter(project=project_ctx.project).first()
         if not annotation_group:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -83,12 +83,11 @@ def get_classes(
             )
         return results
     
-    except HTTPException as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Unexpected Error: {e}"
-        )
+    try:
+        return await get_annotation_classes(project_ctx.project)
     
+    except HTTPException as e:
+        raise 
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
