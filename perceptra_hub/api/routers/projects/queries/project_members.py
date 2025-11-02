@@ -10,7 +10,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 class ProjectMemberOut(BaseModel):
-    id: int
+    id: str
     username: str
     email: str
     first_name: str
@@ -27,7 +27,7 @@ def get_project_members_list(project):
     
     return [
         ProjectMemberOut(
-            id=m.user.id,
+            id=str(m.user.id),
             username=m.user.username,
             email=m.user.email,
             first_name=m.user.first_name,

@@ -222,6 +222,7 @@ def process_image_upload(
                 assigned_job = assign_uploaded_image_to_batch(
                     project_image=project_image,
                     batch_id=batch_id,
+                    user=ctx.user,
                 )
                 
                 if assigned_job:
