@@ -22,7 +22,11 @@ def update_job_status(job: Job):
 
     job.save(update_fields=["status"])
 
-def assign_image_to_available_job(project_image: ProjectImage, max_per_job: int = 50) -> Job | None:
+def assign_image_to_available_job(
+    project_image: ProjectImage, 
+    max_per_job: int = 50,
+    user=None,
+) -> Job | None:
     """
     Assigns a single waiting project image to an available job in the same project.
     Updates job image count and project image assignment status.
@@ -40,13 +44,22 @@ def assign_image_to_available_job(project_image: ProjectImage, max_per_job: int 
     for job in available_jobs:
         if job.image_count is None or job.current_count < max_per_job:
             with transaction.atomic():
-                obj, created = JobImage.objects.get_or_create(job=job, project_image=project_image)
+                obj, created = JobImage.objects.get_or_create(
+                    job=job, 
+                    project_image=project_image
+                )
                 if created:
                     project_image.job_assignment_status = 'assigned'
                     project_image.save(update_fields=["job_assignment_status"])
 
+                    obj.created_at = user
+                    obj.updated_by = user
+                    obj.save(update_fields=['created_at', 'updated_at'])
+                    
                     job.image_count = job.current_count + 1
-                    job.save(update_fields=['image_count'])
+                    job.created_at = user
+                    job.updated_by = user
+                    job.save(update_fields=['image_count', 'created_at', 'updated_by'])
 
             return job
 
@@ -78,9 +91,15 @@ def assign_image_to_available_job(project_image: ProjectImage, max_per_job: int 
         project_image.save(update_fields=["job_assignment_status"])
         return new_job
 
-def assign_uploaded_image_to_batch(project_image, batch_id: Optional[str], user=None):
+def assign_uploaded_image_to_batch(
+    project_image, batch_id: Optional[str], 
+    user=None, 
+):
     if not batch_id:
-        return assign_image_to_available_job(project_image)  # Fallback for production
+        return assign_image_to_available_job(
+            project_image,
+            user=user,
+        )  # Fallback for production
 
     latest_job = (
         Job.objects
@@ -106,11 +125,18 @@ def assign_uploaded_image_to_batch(project_image, batch_id: Optional[str], user=
             "description": "Batch created via UI image upload",
             "status": "assigned" if user else "unassigned",
             "assignee": user if user else None,
-            "image_count": 0
+            "image_count": 0,
+            "created_by": user,
+            "updated_by": user,
         }
     )
 
-    JobImage.objects.create(job=job, project_image=project_image)
+    JobImage.objects.create(
+        job=job, 
+        project_image=project_image,
+        created_by=user,
+        updated_by=user,
+    )
     job.image_count = JobImage.objects.filter(job=job).count()
     job.save(update_fields=["image_count"])
 
