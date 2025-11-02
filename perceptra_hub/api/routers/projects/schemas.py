@@ -121,11 +121,18 @@ class ImageDetail(BaseModel):
     tags: List[str] = []
     storage_profile: Optional[StorageProfileOut]
     download_url: Optional[str]
+    status: Optional[str] = None
+    annotated: Optional[bool] = None
+    reviewed: Optional[bool] = None
+    priority: Optional[int] = 0
+    job_assignment_status: Optional[str] = None
+    added_at: Optional[datetime] = None 
 
 class JobSummary(BaseModel):
     id: str
     name: str
     status: str
+    assignee: Optional[str] = None
 
 
 class AnnotationOut(BaseModel):
@@ -163,3 +170,16 @@ class ProjectImageOut(BaseModel):
     updated_at: str
     jobs: List[JobSummary]
     annotations: List[AnnotationOut]
+    
+class ProjectImage(ImageDetail):
+    annotations: List[AnnotationOut]
+    
+class ProjectImagesResponse(BaseModel):
+    total: int
+    annotated: int
+    unannotated: int
+    reviewed: int
+    images:List[ProjectImage]
+    
+class JobImagesResponce(ProjectImagesResponse):
+    job: JobSummary

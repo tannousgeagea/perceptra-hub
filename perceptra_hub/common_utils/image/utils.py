@@ -182,3 +182,160 @@ def apply_image_filters(queryset, filters: dict):
         queryset = queryset.order_by('-created_at')
     
     return queryset
+
+def parse_project_image_query(query: str) -> dict:
+    """Parse project image search query."""
+    import re
+    
+    filters = {
+        'status': None,
+        'annotated': None,
+        'reviewed': None,
+        'marked_null': None,
+        'job_status': None,
+        'tags': [],
+        'filename': None,
+        'min_width': None,
+        'max_width': None,
+        'min_height': None,
+        'max_height': None,
+        'min_annotations': None,
+        'max_annotations': None,
+        'sort': None,
+        'text_search': []
+    }
+    
+    if not query:
+        return filters
+    
+    tokens = re.findall(r'(?:[^\s"]|"(?:\\.|[^"])*")+', query)
+    
+    for token in tokens:
+        token = token.strip('"')
+        
+        if ':' in token:
+            key, value = token.split(':', 1)
+            key = key.lower()
+            
+            if key == 'status':
+                filters['status'] = value
+            elif key == 'annotated':
+                filters['annotated'] = value.lower() == 'true'
+            elif key == 'reviewed':
+                filters['reviewed'] = value.lower() == 'true'
+            elif key == 'marked-null':
+                filters['marked_null'] = value.lower() == 'true'
+            elif key == 'job-status':
+                filters['job_status'] = value
+            elif key == 'tag':
+                filters['tags'].append(value)
+            elif key == 'filename':
+                filters['filename'] = value
+            elif key == 'min-width':
+                filters['min_width'] = int(value)
+            elif key == 'max-width':
+                filters['max_width'] = int(value)
+            elif key == 'min-height':
+                filters['min_height'] = int(value)
+            elif key == 'max-height':
+                filters['max_height'] = int(value)
+            elif key == 'min-annotations':
+                filters['min_annotations'] = int(value)
+            elif key == 'max-annotations':
+                filters['max_annotations'] = int(value)
+            elif key == 'sort':
+                filters['sort'] = value
+            else:
+                filters['text_search'].append(token)
+        else:
+            filters['text_search'].append(token)
+    
+    return filters
+
+
+def apply_project_image_filters(queryset, filters: dict):
+    """Apply parsed filters to ProjectImage queryset."""
+    from django.db import models
+    
+    # Status filters
+    if filters['status']:
+        queryset = queryset.filter(status=filters['status'])
+    
+    if filters['annotated'] is not None:
+        queryset = queryset.filter(annotated=filters['annotated'])
+    
+    if filters['reviewed'] is not None:
+        queryset = queryset.filter(reviewed=filters['reviewed'])
+    
+    if filters['marked_null'] is not None:
+        queryset = queryset.filter(marked_as_null=filters['marked_null'])
+    
+    if filters['job_status']:
+        queryset = queryset.filter(job_assignment_status=filters['job_status'])
+    
+    # Tag filters (through image)
+    for tag in filters['tags']:
+        queryset = queryset.filter(image__tags__name__iexact=tag)
+    
+    # Filename filter
+    if filters['filename']:
+        queryset = queryset.filter(
+            models.Q(image__name__icontains=filters['filename']) |
+            models.Q(image__original_filename__icontains=filters['filename'])
+        )
+    
+    # Dimension filters (through image)
+    if filters['min_width']:
+        queryset = queryset.filter(image__width__gte=filters['min_width'])
+    if filters['max_width']:
+        queryset = queryset.filter(image__width__lte=filters['max_width'])
+    if filters['min_height']:
+        queryset = queryset.filter(image__height__gte=filters['min_height'])
+    if filters['max_height']:
+        queryset = queryset.filter(image__height__lte=filters['max_height'])
+    
+    # Annotation count filters
+    if filters['min_annotations']:
+        queryset = queryset.annotate(
+            annotation_count=models.Count('annotations', filter=models.Q(annotations__is_active=True))
+        ).filter(annotation_count__gte=filters['min_annotations'])
+    
+    if filters['max_annotations']:
+        queryset = queryset.annotate(
+            annotation_count=models.Count('annotations', filter=models.Q(annotations__is_active=True))
+        ).filter(annotation_count__lte=filters['max_annotations'])
+    
+    # Text search
+    if filters['text_search']:
+        search_query = ' '.join(filters['text_search'])
+        queryset = queryset.filter(
+            models.Q(image__name__icontains=search_query) |
+            models.Q(image__original_filename__icontains=search_query)
+        )
+    
+    # Sorting
+    sort_mapping = {
+        'size': '-image__file_size',
+        'name': 'image__name',
+        'date': '-added_at',
+        'width': '-image__width',
+        'height': '-image__height',
+        'priority': '-priority',
+        'annotations': '-annotation_count'
+    }
+    
+    if filters['sort']:
+        sort_field = sort_mapping.get(filters['sort'], '-priority')
+        
+        # Add annotation count if sorting by it
+        if sort_field == '-annotation_count':
+            queryset = queryset.annotate(
+                annotation_count=models.Count('annotations', filter=models.Q(annotations__is_active=True))
+            )
+        
+        queryset = queryset.order_by(sort_field, '-added_at')
+    else:
+        # Default sort
+        queryset = queryset.order_by('-priority', '-added_at')
+    
+    return queryset
