@@ -1,7 +1,8 @@
 
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from uuid import UUID
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 
@@ -92,3 +93,73 @@ class JobResponse(BaseModel):
 
 class AssignImagesToJobRequest(BaseModel):
     project_image_ids: List[str] = Field(..., min_items=1)
+
+
+class StorageProfileOut(BaseModel):
+    id: str
+    name: str
+    backend: str
+
+class ImageDetail(BaseModel):
+    id: str
+    image_id: str
+    name: str
+    original_filename: Optional[str]
+    width: Optional[int]
+    height: Optional[int]
+    aspect_ratio: Optional[float]
+    file_format: Optional[str]
+    file_size: Optional[int]
+    file_size_mb: Optional[float]
+    megapixels: Optional[float]
+    storage_key: Optional[str]
+    checksum: Optional[str]
+    source_of_origin: Optional[str]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
+    uploaded_by: Optional[str]
+    tags: List[str] = []
+    storage_profile: Optional[StorageProfileOut]
+    download_url: Optional[str]
+
+class JobSummary(BaseModel):
+    id: str
+    name: str
+    status: str
+
+
+class AnnotationOut(BaseModel):
+    id: str
+    annotation_uid: str
+    type: Optional[str]
+    class_id: int
+    class_name: str
+    color: str
+    data: List[float]
+    source: Optional[str]
+    confidence: Optional[float]
+    reviewed: bool
+    is_active: bool
+    created_at: str
+    created_by: Optional[str]
+
+
+class ProjectImageOut(BaseModel):
+    id: str
+    image: ImageDetail
+    status: Optional[str]
+    annotated: bool
+    reviewed: bool
+    finalized: bool
+    marked_as_null: bool
+    priority: Optional[int]
+    job_assignment_status: Optional[str]
+    mode: Optional[Dict[str, Any]]
+    metadata: Optional[Dict[str, Any]]
+    added_by: Optional[str]
+    reviewed_by: Optional[str]
+    added_at: str
+    reviewed_at: Optional[str]
+    updated_at: str
+    jobs: List[JobSummary]
+    annotations: List[AnnotationOut]

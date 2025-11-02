@@ -218,7 +218,7 @@ def process_image_upload(
             if pi_created:
                 logger.info(f"Associated image {image.id} with project {project_id}")
                 
-                # Use existing utility to assign to job (respects 50 image limit)
+                logger.warning(f"Batch ID: {batch_id}")
                 assigned_job = assign_uploaded_image_to_batch(
                     project_image=project_image,
                     batch_id=batch_id,
@@ -268,6 +268,7 @@ async def upload_image(
     tags: Optional[str] = Form(None, description="Comma-separated tag names"),
     source_of_origin: Optional[str] = Form(None, description="Source of image"),
     storage_profile_id: Optional[UUID] = Form(None, description="Specific storage profile to use"),
+    batch_id:Optional[str] = Form(None, description="batch Id where image be assigned to one Job"),
     ctx: RequestContext = Depends(get_request_context)
 ):
     """
@@ -334,7 +335,8 @@ async def upload_image(
             project_id=project_id,
             tag_names=tag_names,
             source_of_origin=source_of_origin,
-            storage_profile_id=storage_profile_id
+            storage_profile_id=storage_profile_id,
+            batch_id=batch_id,
         )
         
         image = result["image"]
@@ -408,6 +410,8 @@ async def batch_upload_images(
         "images": []
     }
     
+    
+    batch_id = uuid.uuid4()
     for file in files:
         try:
             # Reset file pointer
@@ -421,7 +425,8 @@ async def batch_upload_images(
                 tags=None,
                 source_of_origin=source_of_origin,
                 storage_profile_id=None,
-                ctx=ctx
+                ctx=ctx,
+                batch_id=batch_id,
             )
             
             if result.get('duplicate'):
