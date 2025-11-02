@@ -552,6 +552,16 @@ class ProjectContext:
         """Check if user is a project member."""
         return self.project_role is not None
     
+    # NEW: Convenience method
+    def can_edit(self) -> bool:
+        """Check if user can edit project (admin or project editor/owner)."""
+        return self.is_org_admin() or self.has_project_role('owner', 'editor', 'admin')
+    
+    # NEW: Convenience method
+    def can_annotate(self) -> bool:
+        """Check if user can annotate (any project member or org admin)."""
+        return self.is_org_admin() or self.is_project_member()
+    
     def require_org_role(self, *role_names: str):
         """Raise exception if user doesn't have required organization role."""
         if not self.has_org_role(*role_names):
@@ -562,6 +572,8 @@ class ProjectContext:
     
     def require_project_role(self, *role_names: str):
         """Raise exception if user doesn't have required project role."""
+        if self.is_org_admin():
+            return True
         if not self.has_project_role(*role_names):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -575,6 +587,25 @@ class ProjectContext:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied. You must be an organization admin or project member."
             )
+    
+    # NEW: More specific permission check
+    def require_edit_permission(self):
+        """Require user to have edit permissions."""
+        if not self.can_edit():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Edit permission required. Must be organization admin or project owner/editor."
+            )
+    
+    # NEW: For annotation endpoints
+    def require_annotate_permission(self):
+        """Require user to have annotation permissions."""
+        if not self.can_annotate():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Annotation permission required. Must be project member or organization admin."
+            )
+
 
 
 @sync_to_async
@@ -595,7 +626,8 @@ def fetch_project_with_access_check(
         project = Project.objects.select_related('organization').get(
             project_id=project_id,
             organization=organization,
-            is_deleted=False
+            is_deleted=False,
+            is_active=True,
         )
     except Project.DoesNotExist:
         raise HTTPException(

@@ -6,6 +6,7 @@ import time
 import django
 import shutil
 django.setup()
+from uuid import UUID
 from datetime import datetime, timedelta
 from datetime import date, timezone
 from typing import Callable, Optional, Dict, AnyStr, Any, List
@@ -20,7 +21,9 @@ from fastapi import status
 from pathlib import Path
 from django.db import transaction
 from pydantic import BaseModel
+from asgiref.sync import sync_to_async
 
+from api.dependencies import ProjectContext, get_project_context
 from projects.models import (
     Project,
     ProjectImage,
@@ -50,33 +53,40 @@ class TimedRoute(APIRoute):
 
 
 router = APIRouter(
+    prefix="/projects",
     route_class=TimedRoute,
 )
 
-class AnnotationData(BaseModel):
-    id: str
-    x: float
-    y: float
-    width: float
-    height: float
-    label: str
-    color: str
-
-@router.api_route(
-    "/annotations/{id}", methods=["DELETE"], tags=["Annotations"])
-def delete_annotation(id:str):
-    try:
-        if not Annotation.objects.filter(annotation_uid=id).exists():
+@router.delete(
+    "/{project_id}/annotations/{annotation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete Annotation"
+)
+async def delete_annotation(
+    project_id: UUID,
+    annotation_id: str,
+    project_ctx: ProjectContext = Depends(get_project_context),
+    hard_delete: bool = False
+):
+    """Soft or hard delete an annotation."""
+    
+    @sync_to_async
+    def delete_annotation_record(project, annotation_id, hard_delete):
+        try:
+            annotation = Annotation.objects.get(
+                annotation_uid=annotation_id,
+                project_image__project=project
+            )
+        except Annotation.DoesNotExist:
             raise HTTPException(
-                status_code=404, detail=f"Annotation id {id} not Found")
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Annotation not found"
+            )
         
-        annotation = Annotation.objects.filter(annotation_uid=id).first()
-        annotation.is_active = False
-        annotation.save()
-        
-        return {"message": "Annotations deleted successfully."}
-        
-        
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        if hard_delete:
+            annotation.delete()
+        else:
+            annotation.is_active = False
+            annotation.save(update_fields=['is_active'])
+    
+    await delete_annotation_record(project_ctx.project, annotation_id, hard_delete)
