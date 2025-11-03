@@ -488,7 +488,7 @@ class ProjectImageAdmin(ModelAdmin):
         
 @admin.register(Version)
 class VersionAdmin(ModelAdmin):
-    list_display = ('id', 'project', 'version_name', 'version_number', "version_file", 'created_at')
+    list_display = ('id', 'project', 'version_name', 'version_number', 'created_at')
     list_filter = ('project', 'created_at')
     ordering = ('project', 'version_number')
     search_fields = ('project__name', 'version_name')
