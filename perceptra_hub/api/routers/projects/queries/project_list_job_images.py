@@ -124,6 +124,7 @@ async def list_job_images(
                     "status": ji.project_image.status,
                     "annotated": ji.project_image.annotated,
                     "reviewed": ji.project_image.reviewed,
+                    "marked_as_null": ji.project_image.marked_as_null,
                     "priority": ji.project_image.priority,
                     "job_assignment_status": ji.project_image.job_assignment_status,
                     "added_at": ji.project_image.added_at.isoformat(),

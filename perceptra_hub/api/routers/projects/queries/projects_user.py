@@ -10,6 +10,7 @@ from fastapi.routing import APIRoute
 from fastapi import Request, Response
 from typing import Callable
 from api.dependencies import get_request_context, RequestContext
+from api.routers.projects.schemas import ProjectListItem, UserBasicInfo, ProjectStatistics
 import logging
 
 logger = logging.getLogger(__name__)
@@ -26,35 +27,6 @@ class TimedRoute(APIRoute):
         return custom_route_handler
 
 router = APIRouter(route_class=TimedRoute)
-
-# Pydantic models
-class UserBasicInfo(BaseModel):
-    id: int
-    username: str
-    email: str
-    first_name: str
-    last_name: str
-
-class ProjectStatistics(BaseModel):
-    total_images: int
-    total_annotations: int = 0
-    annotation_groups: int
-
-class ProjectListItem(BaseModel):
-    id: int
-    project_id: str
-    name: str
-    description: Optional[str] = None
-    thumbnail_url: Optional[str] = None
-    project_type_name: str
-    visibility_name: str
-    is_active: bool
-    statistics: ProjectStatistics
-    created_by: Optional[UserBasicInfo] = None
-    updated_by: Optional[UserBasicInfo] = None
-    created_at: str
-    last_edited: str
-    user_role: str = Field(..., description="Current user's role in this project")
 
 @sync_to_async
 def get_user_projects(user: User, organization):
