@@ -27,6 +27,34 @@ class ProjectUpdate(BaseModel):
     settings: Optional[dict] = None
 
 
+class UserBasicInfo(BaseModel):
+    id: int
+    username: str
+    email: str
+    first_name: str
+    last_name: str
+
+class ProjectStatistics(BaseModel):
+    total_images: int
+    total_annotations: int = 0
+    annotation_groups: int
+
+class ProjectListItem(BaseModel):
+    id: int
+    project_id: str
+    name: str
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    project_type_name: str
+    visibility_name: str
+    is_active: bool
+    statistics: ProjectStatistics
+    created_by: Optional[UserBasicInfo] = None
+    updated_by: Optional[UserBasicInfo] = None
+    created_at: str
+    last_edited: str
+    user_role: str = Field(..., description="Current user's role in this project")
+
 class ProjectResponse(BaseModel):
     id: str
     project_id: str
@@ -121,11 +149,19 @@ class ImageDetail(BaseModel):
     tags: List[str] = []
     storage_profile: Optional[StorageProfileOut]
     download_url: Optional[str]
+    status: Optional[str] = None
+    annotated: Optional[bool] = None
+    reviewed: Optional[bool] = None
+    marked_as_null:Optional[bool] = None
+    priority: Optional[int] = 0
+    job_assignment_status: Optional[str] = None
+    added_at: Optional[datetime] = None 
 
 class JobSummary(BaseModel):
     id: str
     name: str
     status: str
+    assignee: Optional[str] = None
 
 
 class AnnotationOut(BaseModel):
@@ -163,3 +199,16 @@ class ProjectImageOut(BaseModel):
     updated_at: str
     jobs: List[JobSummary]
     annotations: List[AnnotationOut]
+    
+class ProjectImage(ImageDetail):
+    annotations: List[AnnotationOut]
+    
+class ProjectImagesResponse(BaseModel):
+    total: int
+    annotated: int
+    unannotated: int
+    reviewed: int
+    images:List[ProjectImage]
+    
+class JobImagesResponce(ProjectImagesResponse):
+    job: JobSummary

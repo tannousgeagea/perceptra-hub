@@ -18,7 +18,7 @@ django.setup()
 
 from django.db import models
 
-from api.dependencies import get_current_user, get_current_organization, RequestContext, get_request_context, bypass_auth_dev
+from api.dependencies import RequestContext, get_request_context
 from storage.models import StorageProfile
 from storage.services import get_storage_adapter_for_profile, get_default_storage_adapter
 from images.models import Image, Tag, ImageTag

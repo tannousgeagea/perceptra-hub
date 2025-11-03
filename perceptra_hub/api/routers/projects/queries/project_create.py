@@ -324,58 +324,6 @@ async def create_project(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-# @router.get("/projects/{project_id}", response_model=ProjectResponse)
-# async def get_project(project_id: int):
-#     """Get a project by ID with all its annotation groups and classes."""
-#     try:
-#         project = await get_project_by_id(project_id)
-        
-#         # Get annotation groups with their classes
-#         annotation_groups = await get_annotation_groups_for_project(project)
-        
-#         response_groups = []
-#         for group in annotation_groups:
-#             group_classes = [
-#                 AnnotationClassResponse(
-#                     id=cls.id,
-#                     class_id=cls.class_id,
-#                     name=cls.name,
-#                     color=cls.color,
-#                     description=cls.description,
-#                     created_at=cls.created_at.isoformat()
-#                 )
-#                 for cls in group.classes.all()
-#             ]
-            
-#             response_groups.append(
-#                 AnnotationGroupResponse(
-#                     id=group.id,
-#                     name=group.name,
-#                     description=group.description,
-#                     created_at=group.created_at.isoformat(),
-#                     classes=group_classes
-#                 )
-#             )
-        
-#         return ProjectResponse(
-#             id=project.id,
-#             name=project.name,
-#             description=project.description,
-#             thumbnail_url=project.thumbnail_url,
-#             project_type_name=project.project_type.name,
-#             visibility_name=project.visibility.name,
-#             organization_id=project.organization.id if project.organization else None,
-#             created_at=project.created_at.isoformat(),
-#             last_edited=project.last_edited.isoformat(),
-#             is_active=project.is_active,
-#             annotation_groups=response_groups
-#         )
-        
-#     except ObjectDoesNotExist:
-#         raise HTTPException(status_code=404, detail=f"Project with id {project_id} not found")
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
 @router.get("/project-types/")
 async def get_project_types():
     """Get all available project types."""
@@ -391,29 +339,5 @@ async def get_visibility_options():
     try:
         visibility_options = await get_all_visibility_options()
         return {"visibility_options": visibility_options}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@router.get("/projects/list")
-async def list_projects(skip: int = 0, limit: int = 100):
-    """List all projects with pagination."""
-    try:
-        projects = await get_projects_list(skip, limit)
-        
-        result = []
-        for project in projects:
-            result.append({
-                "id": project.id,
-                "name": project.name,
-                "description": project.description,
-                "project_type_name": project.project_type.name,
-                "visibility_name": project.visibility.name,
-                "organization_id": project.organization.id if project.organization else None,
-                "created_at": project.created_at.isoformat(),
-                "last_edited": project.last_edited.isoformat(),
-                "is_active": project.is_active
-            })
-        
-        return {"projects": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
