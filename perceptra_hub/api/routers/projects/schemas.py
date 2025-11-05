@@ -162,7 +162,8 @@ class JobSummary(BaseModel):
     name: str
     status: str
     assignee: Optional[str] = None
-
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 class AnnotationOut(BaseModel):
     id: str
@@ -212,3 +213,41 @@ class ProjectImagesResponse(BaseModel):
     
 class JobImagesResponce(ProjectImagesResponse):
     job: JobSummary
+    
+   
+class ProjectImageStatusUpdate(BaseModel):
+    status: Optional[str] = Field(None, pattern="^(unannotated|in_progress|annotated|reviewed|approved|rejected|dataset)$")
+    reviewed: Optional[bool] = None
+    marked_as_null: Optional[bool] = None
+    finalized: Optional[bool] = None
+    feedback: Optional[str] = None
+    
+class SplitDatasetRequest(BaseModel):
+    train_ratio: float = Field(..., ge=0.0, le=1.0, description="Train split ratio (0.0-1.0)")
+    val_ratio: float = Field(..., ge=0.0, le=1.0, description="Validation split ratio (0.0-1.0)")
+    test_ratio: float = Field(..., ge=0.0, le=1.0, description="Test split ratio (0.0-1.0)")
+    
+    def validate_ratios(self):
+        """Validate that ratios sum to 1.0."""
+        total = self.train_ratio + self.val_ratio + self.test_ratio
+        if not (0.99 <= total <= 1.01):  # Allow small floating point error
+            raise ValueError(f"Ratios must sum to 1.0, got {total}")
+        return self
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "train_ratio": 0.7,
+                "val_ratio": 0.2,
+                "test_ratio": 0.1
+            }
+        }
+
+
+class SplitDatasetResponse(BaseModel):
+    message: str
+    train_count: int
+    val_count: int
+    test_count: int
+    total_split: int
+    already_split: int

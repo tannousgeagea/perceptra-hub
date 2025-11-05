@@ -10,6 +10,7 @@ from asgiref.sync import sync_to_async
 import uuid
 
 from api.dependencies import get_project_context, ProjectContext
+from api.routers.projects.schemas import ProjectImageStatusUpdate, SplitDatasetRequest, SplitDatasetResponse
 from projects.models import ProjectImage
 from annotations.models import (
     Annotation,
@@ -22,15 +23,6 @@ router = APIRouter(prefix="/projects")
 
 
 # ============= Project Image Management Endpoints =============
-
-class ProjectImageStatusUpdate(BaseModel):
-    status: Optional[str] = Field(None, pattern="^(unannotated|in_progress|annotated|reviewed|approved|rejected|dataset)$")
-    reviewed: Optional[bool] = None
-    marked_as_null: Optional[bool] = None
-    finalized: Optional[bool] = None
-    feedback: Optional[str] = None
-
-
 @router.patch(
     "/{project_id}/images/{project_image_id}/review",
     summary="Review Project Image",

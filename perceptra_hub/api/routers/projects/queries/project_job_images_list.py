@@ -93,7 +93,9 @@ async def list_job_images(
                 "id": str(job.id),
                 "name": job.name,
                 "status": job.status,
-                "assignee": job.assignee.username if job.assignee else None
+                "assignee": job.assignee.username if job.assignee else None,
+                "created_at": job.created_at,
+                "updated_at": job.updated_at,
             },
             "images": [
                 {

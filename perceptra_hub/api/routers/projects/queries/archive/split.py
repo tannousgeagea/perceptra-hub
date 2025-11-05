@@ -40,14 +40,11 @@ router = APIRouter(
 @router.api_route(
     "/projects/{project_id}/split", methods=["POST"], tags=["Projects"], status_code=status.HTTP_201_CREATED
     )
-def create_version(
+def split(
     response:Response,
     project_id: str,
     train_ratio:float,
     ):
-    """
-    Create a new version for a project by associating all reviewed images with the version.
-    """
     try:
         # Fetch the project
         project = Project.objects.filter(name=project_id)
