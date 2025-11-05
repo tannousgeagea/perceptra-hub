@@ -194,6 +194,7 @@ def parse_project_image_query(query: str) -> dict:
         'marked_null': None,
         'job_status': None,
         'tags': [],
+        'classes': [],
         'filename': None,
         'min_width': None,
         'max_width': None,
@@ -229,6 +230,8 @@ def parse_project_image_query(query: str) -> dict:
                 filters['job_status'] = value
             elif key == 'tag':
                 filters['tags'].append(value)
+            elif key == 'class':
+                filters['classes'].append(value)
             elif key == 'filename':
                 filters['filename'] = value
             elif key == 'min-width':
@@ -276,6 +279,9 @@ def apply_project_image_filters(queryset, filters: dict):
     # Tag filters (through image)
     for tag in filters['tags']:
         queryset = queryset.filter(image__tags__name__iexact=tag)
+    
+    for cls in filters['classes']:
+        queryset = queryset.filter(annotations__annotation_class__name__iexact=cls)
     
     # Filename filter
     if filters['filename']:
@@ -337,5 +343,91 @@ def apply_project_image_filters(queryset, filters: dict):
     else:
         # Default sort
         queryset = queryset.order_by('-priority', '-added_at')
+    
+    return queryset
+
+def apply_version_image_filters(queryset, filters: dict):
+    """Apply parsed filters to ProjectImage queryset."""
+    from django.db import models
+    
+    # Status filters
+    if filters['status']:
+        queryset = queryset.filter(project_image__status=filters['status'])
+    
+    if filters['annotated'] is not None:
+        queryset = queryset.filter(project_image__annotated=filters['annotated'])
+    
+    if filters['reviewed'] is not None:
+        queryset = queryset.filter(project_image__reviewed=filters['reviewed'])
+    
+    if filters['marked_null'] is not None:
+        queryset = queryset.filter(project_image__marked_as_null=filters['marked_null'])
+    
+    if filters['job_status']:
+        queryset = queryset.filter(project_image__job_assignment_status=filters['job_status'])
+    
+    # Tag filters (through image)
+    for tag in filters['tags']:
+        queryset = queryset.filter(project_image__image__tags__name__iexact=tag)
+    
+    for cls in filters['classes']:
+        queryset = queryset.filter(project_image__annotations__annotation_class__name__iexact=cls)
+    
+    # Filename filter
+    if filters['filename']:
+        queryset = queryset.filter(
+            models.Q(project_image__image__name__icontains=filters['filename']) |
+            models.Q(project_image__image__original_filename__icontains=filters['filename'])
+        )
+    
+    # Dimension filters (through image)
+    if filters['min_width']:
+        queryset = queryset.filter(project_image__image__width__gte=filters['min_width'])
+    if filters['max_width']:
+        queryset = queryset.filter(project_image__image__width__lte=filters['max_width'])
+    if filters['min_height']:
+        queryset = queryset.filter(project_image__image__height__gte=filters['min_height'])
+    if filters['max_height']:
+        queryset = queryset.filter(project_image__image__height__lte=filters['max_height'])
+    
+    # Annotation count filters
+    if filters['min_annotations']:
+        queryset = queryset.filter(annotation_count__gte=filters['min_annotations'])
+    
+    if filters['max_annotations']:
+        queryset = queryset.filter(annotation_count__lte=filters['max_annotations'])
+    
+    # Text search
+    if filters['text_search']:
+        search_query = ' '.join(filters['text_search'])
+        queryset = queryset.filter(
+            models.Q(project_image__image__name__icontains=search_query) |
+            models.Q(project_image__image__original_filename__icontains=search_query)
+        )
+    
+    # Sorting
+    sort_mapping = {
+        'size': '-image__file_size',
+        'name': 'image__name',
+        'date': '-added_at',
+        'width': '-image__width',
+        'height': '-image__height',
+        'priority': '-priority',
+        'annotations': '-annotation_count'
+    }
+    
+    if filters['sort']:
+        sort_field = sort_mapping.get(filters['sort'], '-priority')
+        
+        # Add annotation count if sorting by it
+        if sort_field == '-annotation_count':
+            queryset = queryset.annotate(
+                annotation_count=models.Count('annotations', filter=models.Q(project_image__annotations__is_active=True))
+            )
+        
+        queryset = queryset.order_by(sort_field, '-added_at')
+    else:
+        # Default sort
+        queryset = queryset.order_by('-project_image__priority', '-added_at')
     
     return queryset

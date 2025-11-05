@@ -454,35 +454,177 @@ class ProjectImage(models.Model):
         if self.annotated:
             return "Annotated"
         return "Not Annotated"
+   
+##############################################################################################
+################################ Dataset Version #############################################
+##############################################################################################
+ 
+class DatasetSplit(models.TextChoices):
+    """Dataset split types."""
+    TRAIN = 'train', _('Training')
+    VAL = 'val', _('Validation')
+    TEST = 'test', _('Test')
+
+
+class DatasetFormat(models.TextChoices):
+    """Export format types."""
+    YOLO = 'yolo', _('YOLO (txt)')
+    COCO = 'coco', _('COCO (json)')
+    PASCAL_VOC = 'pascal_voc', _('Pascal VOC (xml)')
+    TFRECORD = 'tfrecord', _('TFRecord')
+    CUSTOM = 'custom', _('Custom Format')
+
+
+class ExportStatus(models.TextChoices):
+    """Dataset export status."""
+    PENDING = 'pending', _('Pending')
+    PROCESSING = 'processing', _('Processing')
+    COMPLETED = 'completed', _('Completed')
+    FAILED = 'failed', _('Failed')
     
-class Version(models.Model):
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='versions')
+class Version(TimeStampedModel):
+    project = models.ForeignKey(
+        Project, 
+        on_delete=models.CASCADE, 
+        related_name='versions'
+    )
+    
+    # Version info
+    version_id = models.UUIDField(
+        default=uuid.uuid4,
+        editable=False,
+        unique=True,
+        db_index=True
+    )
     version_name = models.CharField(max_length=100)
     version_number = models.PositiveIntegerField()  # Incremental version number
-    created_at = models.DateTimeField(auto_now_add=True)
     description = models.TextField(blank=True, null=True)
-    version_file = models.FileField(upload_to="versions/", null=True, blank=True)
+    
+    # Export configuration
+    export_format = models.CharField(
+        max_length=20,
+        choices=DatasetFormat.choices,
+        default=DatasetFormat.YOLO
+    )
+    
+    # Export status
+    export_status = models.CharField(
+        max_length=20,
+        choices=ExportStatus.choices,
+        default=ExportStatus.PENDING,
+        db_index=True
+    )
+    
+    # Storage
+    dataset_file = models.FileField(
+        upload_to="datasets/",
+        null=True,
+        blank=True,
+        help_text=_('Exported dataset file (zip)')
+    )
+    storage_key = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text=_('Cloud storage key if uploaded to S3/Azure')
+    )
+    file_size = models.BigIntegerField(
+        null=True,
+        blank=True,
+        help_text=_('Dataset file size in bytes')
+    )
+    
+    # Statistics
+    total_images = models.PositiveIntegerField(default=0)
+    total_annotations = models.PositiveIntegerField(default=0)
+    train_count = models.PositiveIntegerField(default=0)
+    val_count = models.PositiveIntegerField(default=0)
+    test_count = models.PositiveIntegerField(default=0)
+    
+    # Metadata
+    export_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=_('Export configuration (image size, augmentation, etc.)')
+    )
+    class_distribution = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=_('Class distribution stats')
+    )
+    error_log = models.TextField(
+        blank=True,
+        null=True,
+        help_text=_('Error log if export failed')
+    )
+    
+    # Timestamps
+    exported_at = models.DateTimeField(null=True, blank=True)
+    download_count = models.PositiveIntegerField(default=0)
 
     class Meta:
         db_table = 'version'
-        verbose_name_plural = 'Versions'
+        verbose_name = _('Dataset Version')
+        verbose_name_plural = _('Dataset Versions')
         unique_together = ('project', 'version_number')
         ordering = ['version_number']
+        indexes = [
+            models.Index(fields=['project', 'export_status']),
+            models.Index(fields=['version_id']),
+        ]
 
     def __str__(self):
         return f"{self.project.name} - {self.version_name} (v{self.version_number})"
 
+    @property
+    def is_ready(self):
+        """Check if dataset is ready for download."""
+        return self.export_status == ExportStatus.COMPLETED and bool(self.dataset_file or self.storage_key)
+
 
 
 class VersionImage(models.Model):
-    version = models.ForeignKey(Version, on_delete=models.CASCADE, related_name='version_images')
-    project_image = models.ForeignKey(ProjectImage, on_delete=models.RESTRICT, related_name='associated_versions')
+    version = models.ForeignKey(
+        Version, 
+        on_delete=models.CASCADE, 
+        related_name='version_images'
+    )
+    
+    project_image = models.ForeignKey(
+        ProjectImage, 
+        on_delete=models.RESTRICT, 
+        related_name='associated_versions'
+    )
+    
+    # Split assignment
+    split = models.CharField(
+        max_length=10,
+        choices=DatasetSplit.choices,
+        default=DatasetSplit.TRAIN,
+        db_index=True,
+        help_text=_('Dataset split (train/val/test)')
+    )
+    
+    # Metadata
+    annotation_count = models.PositiveIntegerField(
+        default=0,
+        help_text=_('Number of annotations on this image')
+    )
+    included_in_export = models.BooleanField(
+        default=True,
+        help_text=_('Whether image was included in export')
+    )
+    
     added_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ('version', 'project_image')
         db_table = 'version_image'
         verbose_name_plural = 'Version Images'
+        verbose_name_plural = _('Version Images')
+        indexes = [
+            models.Index(fields=['version', 'split']),
+        ]
 
     def __str__(self):
         return f"{self.version.version_name} - {self.project_image.image.image_name}"
