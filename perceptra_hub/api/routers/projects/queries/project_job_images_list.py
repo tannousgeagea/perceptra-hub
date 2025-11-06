@@ -130,6 +130,7 @@ async def list_job_images(
                     "priority": ji.project_image.priority,
                     "job_assignment_status": ji.project_image.job_assignment_status,
                     "added_at": ji.project_image.added_at.isoformat(),
+                    "split": ji.project_image.mode.mode if ji.project_image.mode else None, 
                     "annotations": [
                         {
                             "id": str(ann.id),

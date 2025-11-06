@@ -189,6 +189,7 @@ def parse_project_image_query(query: str) -> dict:
     
     filters = {
         'status': None,
+        'split': None,
         'annotated': None,
         'reviewed': None,
         'marked_null': None,
@@ -228,6 +229,8 @@ def parse_project_image_query(query: str) -> dict:
                 filters['marked_null'] = value.lower() == 'true'
             elif key == 'job-status':
                 filters['job_status'] = value
+            elif key == 'split':
+                filters['split'] = value
             elif key == 'tag':
                 filters['tags'].append(value)
             elif key == 'class':
@@ -275,6 +278,10 @@ def apply_project_image_filters(queryset, filters: dict):
     
     if filters['job_status']:
         queryset = queryset.filter(job_assignment_status=filters['job_status'])
+    
+    if filters['split']:
+        queryset = queryset.filter(mode__mode=filters['split'])
+    
     
     # Tag filters (through image)
     for tag in filters['tags']:
@@ -365,6 +372,10 @@ def apply_version_image_filters(queryset, filters: dict):
     
     if filters['job_status']:
         queryset = queryset.filter(project_image__job_assignment_status=filters['job_status'])
+    
+    if filters['split']:
+        queryset = queryset.filter(project_image__mode__mode=filters['split'])
+    
     
     # Tag filters (through image)
     for tag in filters['tags']:
