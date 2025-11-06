@@ -179,8 +179,7 @@ class AnnotationOut(BaseModel):
     is_active: bool
     created_at: str
     created_by: Optional[str]
-
-
+    
 class ProjectImageOut(BaseModel):
     id: str
     image: ImageDetail
@@ -202,6 +201,7 @@ class ProjectImageOut(BaseModel):
     annotations: List[AnnotationOut]
     
 class ProjectImage(ImageDetail):
+    split:Optional[str] = None
     annotations: List[AnnotationOut]
     
 class ProjectImagesResponse(BaseModel):

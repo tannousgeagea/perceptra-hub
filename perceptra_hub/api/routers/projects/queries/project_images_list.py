@@ -154,6 +154,7 @@ async def list_project_images(
                     "priority": pi.priority,
                     "job_assignment_status": pi.job_assignment_status,
                     "added_at": pi.added_at.isoformat(),
+                    "split": pi.mode.mode if pi.mode else None,
                     "annotations": [
                         {
                             "id": str(ann.id),
