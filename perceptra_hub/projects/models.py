@@ -462,7 +462,7 @@ class ProjectImage(models.Model):
 class DatasetSplit(models.TextChoices):
     """Dataset split types."""
     TRAIN = 'train', _('Training')
-    VAL = 'val', _('Validation')
+    VAL = 'valid', _('Validation')
     TEST = 'test', _('Test')
 
 
