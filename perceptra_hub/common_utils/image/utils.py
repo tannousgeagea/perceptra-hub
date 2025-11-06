@@ -374,7 +374,7 @@ def apply_version_image_filters(queryset, filters: dict):
         queryset = queryset.filter(project_image__job_assignment_status=filters['job_status'])
     
     if filters['split']:
-        queryset = queryset.filter(project_image__mode__mode=filters['split'])
+        queryset = queryset.filter(split=filters['split'])
     
     
     # Tag filters (through image)
