@@ -62,7 +62,7 @@ async def split_dataset(
         # Get image modes
         try:
             train_mode = ImageMode.objects.get(mode='train')
-            val_mode = ImageMode.objects.get(mode='valid')
+            val_mode = ImageMode.objects.get(mode='val')
             test_mode = ImageMode.objects.get(mode='test')
         except ImageMode.DoesNotExist:
             raise HTTPException(

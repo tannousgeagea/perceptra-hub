@@ -496,4 +496,5 @@ class VersionAdmin(ModelAdmin):
 @admin.register(VersionImage)
 class VersionImageAdmin(ModelAdmin):
     list_display = ('version', 'project_image', 'added_at')
-    list_filter = ('version', 'version__project')
+    list_filter = ('version', 'version__project', 'split')
+    search_fields = ("project_image__image__name",)

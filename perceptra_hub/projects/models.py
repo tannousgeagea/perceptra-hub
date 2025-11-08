@@ -8,6 +8,8 @@ from organizations.models import (
     Organization
 )
 
+from storage.models import StorageProfile
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
@@ -462,7 +464,7 @@ class ProjectImage(models.Model):
 class DatasetSplit(models.TextChoices):
     """Dataset split types."""
     TRAIN = 'train', _('Training')
-    VAL = 'valid', _('Validation')
+    VAL = 'val', _('Validation')
     TEST = 'test', _('Test')
 
 
@@ -521,6 +523,12 @@ class Version(TimeStampedModel):
         null=True,
         blank=True,
         help_text=_('Exported dataset file (zip)')
+    )
+    storage_profile = models.ForeignKey(
+        StorageProfile,
+        on_delete=models.PROTECT,  # Prevent deletion of profile with images
+        related_name='dataset_versions',
+        help_text=_('Storage profile where this image is stored')
     )
     storage_key = models.CharField(
         max_length=500,
@@ -581,6 +589,26 @@ class Version(TimeStampedModel):
         """Check if dataset is ready for download."""
         return self.export_status == ExportStatus.COMPLETED and bool(self.dataset_file or self.storage_key)
 
+
+    def get_download_url(self, expiration: int = 3600) -> str:
+        """
+        Generate a presigned download URL for this image.
+        
+        Args:
+            expiration: URL expiration in seconds
+        
+        Returns:
+            Presigned URL string
+        """
+        from storage.services import get_storage_adapter_for_profile
+        
+        adapter = get_storage_adapter_for_profile(self.storage_profile)
+        presigned = adapter.generate_presigned_url(
+            self.storage_key,
+            expiration=expiration,
+            method='GET'
+        )
+        return presigned.url
 
 
 class VersionImage(models.Model):

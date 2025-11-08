@@ -56,7 +56,7 @@ async def download_dataset(
         # Generate presigned URL if using cloud storage
         if version.storage_key:
             # TODO: Generate presigned URL from storage adapter
-            download_url = f"/datasets/{version.storage_key}"
+            download_url = version.get_download_url(expiration=3600)
         else:
             download_url = version.dataset_file.url if version.dataset_file else None
         

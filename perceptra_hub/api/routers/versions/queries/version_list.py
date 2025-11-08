@@ -30,8 +30,6 @@ async def list_versions(
 ):
     """List all dataset versions for project."""
     
-    logger.error(project_id)
-    
     @sync_to_async
     def get_versions(project, skip, limit, export_status):
         queryset = Version.objects.filter(project=project)
