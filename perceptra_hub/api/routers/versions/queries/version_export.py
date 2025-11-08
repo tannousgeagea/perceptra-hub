@@ -82,13 +82,13 @@ async def export_dataset(
     version_pk = await prepare_export(project_ctx.project, version_id, config)
     
     # Run export in background thread (or use Celery in production)
+    # @sync_to_async
     def run_export():
-        from common_utils.dataset_export.manager import DatasetExportManager
-        DatasetExportManager.export_version(version_pk)
+        from common_utils.dataset_export.streaming.manager import StreamingDatasetExportManager
+        StreamingDatasetExportManager.export_version(version_pk)
     
-    thread = threading.Thread(target=run_export)
+    thread = threading.Thread(target=run_export, daemon=True)
     thread.start()
-    
     
     # Alternative: Use Celery for production
     # from dataset_export import export_dataset_task
@@ -183,8 +183,8 @@ async def retry_export(
     
     # Run export in background
     def run_export():
-        from common_utils.dataset_export.manager import DatasetExportManager
-        DatasetExportManager.export_version(version_pk)
+        from common_utils.dataset_export.streaming.manager import StreamingDatasetExportManager
+        StreamingDatasetExportManager.export_version(version_pk)
     
     thread = threading.Thread(target=run_export)
     thread.start()

@@ -172,6 +172,76 @@ class BaseExporter:
         return results
 
 
+
+class StreamingZipExporter:
+    """Base class for streaming zip export without local disk."""
+    
+    def __init__(self, version: Version, config: ExportConfig):
+        self.version = version
+        self.config = config
+        self.zip_stream = zipstream.ZipFile(
+            mode='w',
+            compression=zipstream.ZIP_DEFLATED,
+            allowZip64=True
+        )
+    
+    def add_file_from_bytes(self, filename: str, data: bytes):
+        """Add file from bytes to zip."""
+        self.zip_stream.writestr(filename, data)
+    
+    def add_file_from_iterator(self, filename: str, iterator):
+        """Add file from iterator to zip."""
+        self.zip_stream.write_iter(filename, iterator)
+    
+    def process_image_bytes(
+        self,
+        image_data: bytes,
+        target_size: Optional[int] = None
+    ) -> bytes:
+        """Process image in memory and return bytes."""
+        img = PILImage.open(io.BytesIO(image_data))
+        
+        # Resize if needed
+        if target_size:
+            img = img.resize((target_size, target_size), PILImage.LANCZOS)
+        
+        # Save to bytes
+        output = io.BytesIO()
+        img.convert('RGB').save(
+            output,
+            format='JPEG',
+            quality=self.config.image_quality,
+            optimize=True
+        )
+        output.seek(0)
+        return output.read()
+    
+    def stream_to_storage(self, storage_key: str):
+        """Stream zip directly to storage."""
+        # Get storage adapter
+        storage_profile = self.version.project.organization.storage_profiles.filter(
+            is_default=True
+        ).first()
+        
+        if not storage_profile:
+            raise ValueError("No default storage profile found")
+        
+        adapter = get_storage_adapter_for_profile(storage_profile)
+        
+        # Create streaming iterator
+        def chunk_iterator():
+            for chunk in self.zip_stream:
+                yield chunk
+        
+        # Upload stream directly
+        adapter.upload_file(
+            file_obj=chunk_iterator(),
+            key=storage_key,
+            content_type='application/zip'
+        )
+        
+        return storage_key
+
 # ============= Celery Task (Optional) =============
 
 # Uncomment if using Celery

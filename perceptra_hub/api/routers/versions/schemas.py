@@ -1,4 +1,5 @@
 
+from uuid import UUID
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 
@@ -8,6 +9,7 @@ from typing import Optional, List, Dict, Any
 class VersionCreate(BaseModel):
     version_name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = None
+    storage_profile_id: Optional[UUID] = None
     export_format: str = Field(default="yolo", pattern="^(yolo|coco|pascal_voc|tfrecord|custom)$")
     export_config: dict = Field(default_factory=dict)
     
