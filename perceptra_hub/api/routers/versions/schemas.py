@@ -1,6 +1,6 @@
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 
 # ============= Schemas =============
@@ -70,3 +70,42 @@ class VersionStatistics(BaseModel):
     splits: dict
     class_distribution: dict
     average_annotations_per_image: float
+
+class ExportConfigRequest(BaseModel):
+    """Export configuration request."""
+    image_size: Optional[int] = Field(None, ge=128, le=4096, description="Resize images to square")
+    image_quality: int = Field(95, ge=1, le=100, description="JPEG quality")
+    normalize: bool = Field(False, description="Normalize coordinates to 0-1")
+    include_difficult: bool = Field(True, description="Include difficult annotations")
+    include_predictions: bool = Field(False, description="Include model predictions")
+    min_annotation_area: float = Field(0.0, ge=0.0, le=1.0, description="Filter annotations smaller than this")
+    
+    # Augmentation
+    augment: bool = Field(False, description="Apply data augmentation")
+    augmentation_factor: int = Field(1, ge=1, le=10, description="Number of augmented copies per image")
+    augmentation_config: Optional[Dict[str, Any]] = Field(
+        default_factory=lambda: {
+            "horizontal_flip": True,
+            "vertical_flip": False,
+            "rotation_limit": 15,
+            "brightness_contrast": True,
+            "blur": False,
+            "noise": False
+        },
+        description="Augmentation parameters"
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "image_size": 640,
+                "image_quality": 95,
+                "augment": True,
+                "augmentation_factor": 2,
+                "augmentation_config": {
+                    "horizontal_flip": True,
+                    "rotation_limit": 15,
+                    "brightness_contrast": True
+                }
+            }
+        }
