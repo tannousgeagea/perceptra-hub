@@ -5,7 +5,12 @@ import inspect
 import importlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routers.images import endpoint
+
+import sys
+from pathlib import Path
+base_dir = Path(__file__).resolve().parent.parent
+sys.path.append(str(base_dir))
+from api.config.celery_utils import celery_app
 
 ROUTERS_DIR = os.path.dirname(__file__) + "/routers"
 ROUTERS = [
@@ -16,6 +21,10 @@ ROUTERS = [
     ]
 
 def create_app() -> FastAPI:
+    
+    import django
+    django.setup()
+    
     tags_meta = [
         {
             "name": "Data Upload DATA API",
@@ -45,6 +54,8 @@ def create_app() -> FastAPI:
         allow_headers=["X-Requested-With", "X-Request-ID", "X-Organization-ID", "Authorization"],
         expose_headers=["X-Request-ID", "X-Progress-ID", "x-response-time"],
     )
+    
+    app.celery_app = celery_app
 
     for R in ROUTERS:
         try:
@@ -58,7 +69,8 @@ def create_app() -> FastAPI:
     return app
 
 app = create_app()
-
+celery = app.celery_app
+celery.autodiscover_tasks(['api.tasks'])
 
 if __name__ == "__main__":
     import os

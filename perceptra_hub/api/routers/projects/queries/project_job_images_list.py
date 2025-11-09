@@ -145,7 +145,7 @@ async def list_job_images(
                             "reviewed": ann.reviewed,
                             "is_active": ann.is_active,
                             "created_at": ann.created_at.isoformat(),
-                            "created_by": ann.created_by,
+                            "created_by": ann.created_by.username if ann.created_at else None,
                         }
                         for ann in ji.project_image.annotations.filter(is_active=True).select_related(
                             'annotation_class', 'annotation_type'

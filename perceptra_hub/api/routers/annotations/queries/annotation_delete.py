@@ -71,7 +71,7 @@ async def delete_annotation(
     """Soft or hard delete an annotation."""
     
     @sync_to_async
-    def delete_annotation_record(project, annotation_id, hard_delete):
+    def delete_annotation_record(project, annotation_id, hard_delete, user):
         try:
             annotation = Annotation.objects.get(
                 annotation_uid=annotation_id,
@@ -86,7 +86,6 @@ async def delete_annotation(
         if hard_delete:
             annotation.delete()
         else:
-            annotation.is_active = False
-            annotation.save(update_fields=['is_active'])
+            annotation.soft_delete(user=user)
     
-    await delete_annotation_record(project_ctx.project, annotation_id, hard_delete)
+    await delete_annotation_record(project_ctx.project, annotation_id, hard_delete, project_ctx.user)

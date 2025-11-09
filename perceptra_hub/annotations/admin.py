@@ -40,9 +40,9 @@ class AnnotationTypeAdmin(ModelAdmin):
 
 @admin.register(Annotation)
 class AnnotationAdmin(ModelAdmin):
-    list_display = ('id', 'project_image', 'annotation_class', 'annotation_type','created_at', 'confidence', 'reviewed', 'feedback_provided')
+    list_display = ('id', 'project_image', 'annotation_class', 'annotation_type','created_at', 'confidence', 'reviewed')
     search_fields = ('project_image__image__image_name', 'annotation_class__name', 'annotation_type__name', 'created_by')
-    list_filter = ('annotation_class', 'annotation_type', 'created_at', 'project_image__project__name', 'reviewed', 'feedback_provided')
+    list_filter = ('annotation_class', 'annotation_type', 'created_at', 'project_image__project__name', 'reviewed')
     ordering = ('-created_at',)
     readonly_fields = ('created_at',)
 
