@@ -51,3 +51,7 @@ class AnnotationResponse(BaseModel):
 class AnnotationCreateResponse(BaseModel):
     message: str
     annotation: AnnotationResponse
+    
+class AnnotationAuditConfig:
+    MINOR_AUDIT_THRESHOLD:float = 0.3
+    MAJOR_AUDIT_THRESHOLD:float = 0.7

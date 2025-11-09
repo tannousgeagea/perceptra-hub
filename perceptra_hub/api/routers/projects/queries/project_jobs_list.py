@@ -36,7 +36,7 @@ async def list_jobs(
         
         queryset = (
             Job.objects.filter(
-                project=project,
+                project=project, is_active=True,
             )
                 .select_related("assignee")
                 .annotate(

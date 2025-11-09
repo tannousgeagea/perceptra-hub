@@ -6,11 +6,13 @@ from typing import Optional, List
 from uuid import UUID
 from pydantic import BaseModel, Field
 import logging
+
+from django.utils import timezone
 from asgiref.sync import sync_to_async
 import uuid
 
 from api.dependencies import get_project_context, ProjectContext
-from api.routers.annotations.schemas import AnnotationCreate, AnnotationResponse, AnnotationBatchCreate, AnnotationCreateResponse
+from api.routers.annotations.schemas import AnnotationCreate, AnnotationResponse, AnnotationBatchCreate, AnnotationCreateResponse, AnnotationAuditConfig
 from projects.models import ProjectImage
 from django.db import transaction
 from annotations.models import (
@@ -111,8 +113,7 @@ async def create_annotation(
                 annotation.annotation_type = annotation_type
                 annotation.annotation_class = annotation_class
                 annotation.data = data.data
-                annotation.annotation_source = data.annotation_source
-                annotation.confidence = data.confidence
+                annotation.updated_by = user
                 annotation.save()
                 created = False
             else:   
@@ -125,7 +126,8 @@ async def create_annotation(
                     annotation_uid=data.annotation_uid or str(uuid.uuid4()),
                     annotation_source=data.annotation_source,
                     confidence=data.confidence,
-                    created_by=user.username if user else None
+                    created_by=user,
+                    updated_by=user
                 )
                 created = True
                 
@@ -135,34 +137,31 @@ async def create_annotation(
                 project_image.status = 'annotated'
                 project_image.save(update_fields=['annotated', 'status'])
         
-        return annotation, created
+        return {
+            "message": "Annotation created successfully" if created else "Annotation update successffully",
+            "annotation": AnnotationResponse(
+                id=str(annotation.id),
+                annotation_uid=annotation.annotation_uid,
+                type=annotation.annotation_type.name,
+                class_id=annotation.annotation_class.class_id,
+                class_name=annotation.annotation_class.name,
+                color=annotation.annotation_class.color,
+                data=annotation.data,
+                source=annotation.annotation_source,
+                confidence=annotation.confidence,
+                reviewed=annotation.reviewed,
+                is_active=annotation.is_active,
+                created_at=annotation.created_at.isoformat(),
+                created_by=annotation.created_by.username if annotation.created_by else None
+            )
+        }
     
-    annotation, created = await create_annotation_record(
+    return await create_annotation_record(
         project_ctx.project,
         project_image_id,
         data,
         project_ctx.user
     )
-    
-    return {
-        "message": "Annotation created successfully" if created else "Annotation update successffully",
-        "annotation": AnnotationResponse(
-            id=str(annotation.id),
-            annotation_uid=annotation.annotation_uid,
-            type=annotation.annotation_type.name,
-            class_id=annotation.annotation_class.class_id,
-            class_name=annotation.annotation_class.name,
-            color=annotation.annotation_class.color,
-            data=annotation.data,
-            source=annotation.annotation_source,
-            confidence=annotation.confidence,
-            reviewed=annotation.reviewed,
-            is_active=annotation.is_active,
-            created_at=annotation.created_at.isoformat(),
-            created_by=annotation.created_by
-        )
-    }
-
 
 @router.post(
     "/{project_id}/annotations/batch",

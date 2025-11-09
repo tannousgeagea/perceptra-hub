@@ -5,7 +5,9 @@ import inspect
 import importlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routers.images import endpoint
+from api.config.celery_utils import celery_app
+import django
+django.setup()
 
 ROUTERS_DIR = os.path.dirname(__file__) + "/routers"
 ROUTERS = [
@@ -45,6 +47,8 @@ def create_app() -> FastAPI:
         allow_headers=["X-Requested-With", "X-Request-ID", "X-Organization-ID", "Authorization"],
         expose_headers=["X-Request-ID", "X-Progress-ID", "x-response-time"],
     )
+    
+    app.celery_app = celery_app
 
     for R in ROUTERS:
         try:
@@ -58,7 +62,7 @@ def create_app() -> FastAPI:
     return app
 
 app = create_app()
-
+celery = app.celery_app
 
 if __name__ == "__main__":
     import os

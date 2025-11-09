@@ -471,7 +471,7 @@ class ImageModeAdmin(ModelAdmin):
 @admin.register(ProjectImage)
 class ProjectImageAdmin(ModelAdmin):
     list_display = ('id', 'project', 'image', "status", 'annotated', 'reviewed', 'feedback_provided', 'added_at')
-    search_fields = ('project__name', 'image__image_name', 'image__image_id')
+    search_fields = ('project__name', 'image__name', 'image__image_id')
     list_filter = ('annotated', 'added_at', 'project', 'annotated', 'reviewed', 'mode', "status", "feedback_provided", "marked_as_null", "is_active")
     ordering = ('-added_at',)
 

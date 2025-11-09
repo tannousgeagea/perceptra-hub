@@ -81,7 +81,7 @@ def get_jobs_for_project(
 
     return [
         JobOut(
-            id=job.id,
+            id=str(job.id),
             name=job.name,
             description=job.description,
             status=job.status,

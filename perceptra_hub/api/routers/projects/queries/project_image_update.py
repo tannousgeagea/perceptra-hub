@@ -59,6 +59,16 @@ async def review_project_image(
         project_image.reviewed_by = user
         project_image.reviewed_at = timezone.now()
         
+        # updatre annotation to reviewed
+        Annotation.objects.filter(
+            project_image=project_image,
+            is_active=True
+        ).update(
+            reviewed=True, 
+            reviewed_by=user, 
+            reviewed_at=timezone.now()
+        )
+        
         # Add feedback to metadata
         if feedback:
             if not project_image.metadata:
@@ -137,7 +147,12 @@ async def mark_image_as_null(
                 deleted_count = Annotation.objects.filter(
                     project_image=project_image,
                     is_active=True
-                ).update(is_active=False)
+                ).update(
+                    is_active=False, 
+                    is_delete=True,
+                    deleted_by=user,
+                    deleted_at=timezone.now()
+                )
                 
                 # Store metadata
                 if not project_image.metadata:

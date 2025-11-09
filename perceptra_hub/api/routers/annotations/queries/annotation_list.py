@@ -88,40 +88,38 @@ async def list_annotations(
             ).order_by('-created_at')
         )
         
-        return annotations
+        return {
+            "count": len(annotations),
+            "annotations": [
+                {
+                    "id": str(ann.id),
+                    "annotation_uid": ann.annotation_uid,
+                    "type": ann.annotation_type.name if ann.annotation_type else None,
+                    "class_id": ann.annotation_class.class_id,
+                    "class_name": ann.annotation_class.name,
+                    "color": ann.annotation_class.color,
+                    "data": {
+                        "id": ann.annotation_uid,
+                        "x": ann.data[0],
+                        "y": ann.data[1],
+                        "width": ann.data[2] - ann.data[0],
+                        "height": ann.data[3] - ann.data[1],
+                        "label": ann.annotation_class.name,
+                        "color": ann.annotation_class.color
+                    },
+                    "source": ann.annotation_source,
+                    "confidence": ann.confidence,
+                    "reviewed": ann.reviewed,
+                    "is_active": ann.is_active,
+                    "created_at": ann.created_at.isoformat(),
+                    "created_by": ann.created_by.username if ann.created_at else None
+                }
+                for ann in annotations
+            ]
+        }
     
-    annotations = await get_annotations(
+    return await get_annotations(
         project_ctx.project,
         project_image_id,
         include_inactive
     )
-    
-    return {
-        "count": len(annotations),
-        "annotations": [
-            {
-                "id": str(ann.id),
-                "annotation_uid": ann.annotation_uid,
-                "type": ann.annotation_type.name if ann.annotation_type else None,
-                "class_id": ann.annotation_class.class_id,
-                "class_name": ann.annotation_class.name,
-                "color": ann.annotation_class.color,
-                "data": {
-                    "id": ann.annotation_uid,
-                    "x": ann.data[0],
-                    "y": ann.data[1],
-                    "width": ann.data[2] - ann.data[0],
-                    "height": ann.data[3] - ann.data[1],
-                    "label": ann.annotation_class.name,
-                    "color": ann.annotation_class.color
-                },
-                "source": ann.annotation_source,
-                "confidence": ann.confidence,
-                "reviewed": ann.reviewed,
-                "is_active": ann.is_active,
-                "created_at": ann.created_at.isoformat(),
-                "created_by": ann.created_by
-            }
-            for ann in annotations
-        ]
-    }
