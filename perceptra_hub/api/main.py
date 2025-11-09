@@ -5,9 +5,12 @@ import inspect
 import importlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+import sys
+from pathlib import Path
+base_dir = Path(__file__).resolve().parent.parent
+sys.path.append(str(base_dir))
 from api.config.celery_utils import celery_app
-import django
-django.setup()
 
 ROUTERS_DIR = os.path.dirname(__file__) + "/routers"
 ROUTERS = [
@@ -18,6 +21,10 @@ ROUTERS = [
     ]
 
 def create_app() -> FastAPI:
+    
+    import django
+    django.setup()
+    
     tags_meta = [
         {
             "name": "Data Upload DATA API",
@@ -63,6 +70,7 @@ def create_app() -> FastAPI:
 
 app = create_app()
 celery = app.celery_app
+celery.autodiscover_tasks(['api.tasks'])
 
 if __name__ == "__main__":
     import os
