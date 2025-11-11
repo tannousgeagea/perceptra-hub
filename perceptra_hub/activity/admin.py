@@ -243,10 +243,10 @@ class ActivityEventAdmin(ModelAdmin):
         if obj.duration_ms < 1000:
             return f"{obj.duration_ms}ms"
         elif obj.duration_ms < 60000:
-            return f"{obj.duration_ms / 1000:.1f}s"
+            return f"{obj.duration_ms / 1000}s"
         else:
             minutes = obj.duration_ms / 60000
-            return f"{minutes:.1f}min"
+            return f"{minutes}min"
     duration_display.short_description = 'Duration'
     
     def session_id_short(self, obj):
@@ -392,7 +392,7 @@ class UserActivityMetricsAdmin(ModelAdmin):
         color = '#2ecc71' if score > 100 else '#f39c12' if score > 50 else '#95a5a6'
         
         return format_html(
-            '<span style="color: {}; font-weight: bold;">{:.0f}</span>',
+            '<span style="color: {}; font-weight: bold;">{}</span>',
             color,
             score
         )
@@ -544,7 +544,7 @@ class ProjectActivityMetricsAdmin(ModelAdmin):
             '<div style="width: {}%; background: #f39c12; height: 20px; float: left;"></div>'
             '</div>'
             '<div style="font-size: 11px; margin-top: 2px;">'
-            '✓ {:.0f}% | ⚡ {:.0f}% | ✏️ {:.0f}%'
+            '✓ {}% | ⚡ {}% | ✏️ {}%'
             '</div>',
             finalized_pct, reviewed_pct - finalized_pct, annotated_pct - reviewed_pct,
             finalized_pct, reviewed_pct, annotated_pct
@@ -554,7 +554,7 @@ class ProjectActivityMetricsAdmin(ModelAdmin):
     def velocity_display(self, obj):
         """Display annotation velocity."""
         if obj.annotations_per_hour:
-            return f"{obj.annotations_per_hour:.1f}/hr"
+            return f"{obj.annotations_per_hour}/hr"
         return '-'
     velocity_display.short_description = 'Velocity'
     
@@ -610,7 +610,7 @@ class ProjectActivityMetricsAdmin(ModelAdmin):
             <div style="margin: 10px 0;">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                     <span>❌ Unannotated</span>
-                    <span><strong>{obj.images_unannotated}</strong> ({unannotated_pct:.1f}%)</span>
+                    <span><strong>{obj.images_unannotated}</strong> ({unannotated_pct}%)</span>
                 </div>
                 <div style="width: 100%; background: #ecf0f1; border-radius: 3px;">
                     <div style="width: {unannotated_pct}%; background: #e74c3c; height: 15px; border-radius: 3px;"></div>
@@ -620,7 +620,7 @@ class ProjectActivityMetricsAdmin(ModelAdmin):
             <div style="margin: 10px 0;">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                     <span>✏️ Annotated</span>
-                    <span><strong>{obj.images_annotated}</strong> ({annotated_pct:.1f}%)</span>
+                    <span><strong>{obj.images_annotated}</strong> ({annotated_pct}%)</span>
                 </div>
                 <div style="width: 100%; background: #ecf0f1; border-radius: 3px;">
                     <div style="width: {annotated_pct}%; background: #f39c12; height: 15px; border-radius: 3px;"></div>
@@ -630,7 +630,7 @@ class ProjectActivityMetricsAdmin(ModelAdmin):
             <div style="margin: 10px 0;">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                     <span>⚡ Reviewed</span>
-                    <span><strong>{obj.images_reviewed}</strong> ({reviewed_pct:.1f}%)</span>
+                    <span><strong>{obj.images_reviewed}</strong> ({reviewed_pct}%)</span>
                 </div>
                 <div style="width: 100%; background: #ecf0f1; border-radius: 3px;">
                     <div style="width: {reviewed_pct}%; background: #3498db; height: 15px; border-radius: 3px;"></div>
@@ -640,7 +640,7 @@ class ProjectActivityMetricsAdmin(ModelAdmin):
             <div style="margin: 10px 0;">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                     <span>✅ Finalized</span>
-                    <span><strong>{obj.images_finalized}</strong> ({finalized_pct:.1f}%)</span>
+                    <span><strong>{obj.images_finalized}</strong> ({finalized_pct}%)</span>
                 </div>
                 <div style="width: 100%; background: #ecf0f1; border-radius: 3px;">
                     <div style="width: {finalized_pct}%; background: #2ecc71; height: 15px; border-radius: 3px;"></div>
@@ -658,8 +658,8 @@ class ProjectActivityMetricsAdmin(ModelAdmin):
         
         if obj.ai_predictions > 0:
             accepted = obj.ai_predictions - obj.edited_predictions - obj.rejected_predictions
-            ai_acceptance_rate = f"{(accepted / obj.ai_predictions) * 100:.1f}%"
-            ai_edit_rate = f"{(obj.edited_predictions / obj.ai_predictions) * 100:.1f}%"
+            ai_acceptance_rate = f"{(accepted / obj.ai_predictions) * 100}%"
+            ai_edit_rate = f"{(obj.edited_predictions / obj.ai_predictions) * 100}%"
         
         html = f"""
         <div style="background: #fff3cd; padding: 15px; border-radius: 5px; max-width: 500px;">
