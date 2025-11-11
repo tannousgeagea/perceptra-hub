@@ -5,6 +5,7 @@ from typing import Optional
 from projects.models import ProjectImage
 from django.db import transaction
 from django.db.models import Count
+from django.core.cache import cache
 from django.utils.timezone import now
 import logging
 import re
@@ -68,6 +69,73 @@ def _assign_to_job(project_image, job, user=None) -> None:
     job.image_count = JobImage.objects.filter(job=job).count()
     job.updated_by = user
     job.save(update_fields=['image_count', 'updated_by'])
+
+def _get_or_create_batch_job(project, batch_id: str, user=None) -> 'Job':
+    """
+    Thread-safe get_or_create for batch jobs using external lock.
+    Uses cache-based locking to prevent race conditions across multiple workers.
+    """
+    lock_key = f"batch_job_lock:{project.id}:{batch_id}"
+    lock_timeout = 30  # seconds
+    
+    # Try to acquire lock with timeout
+    lock_acquired = cache.add(lock_key, "locked", lock_timeout)
+    
+    try:
+        if not lock_acquired:
+            # Another process is creating the job, wait and retry
+            import time
+            max_retries = 10
+            retry_delay = 0.5
+            
+            for _ in range(max_retries):
+                time.sleep(retry_delay)
+                existing_job = Job.objects.filter(
+                    project=project,
+                    batch_id=batch_id
+                ).first()
+                
+                if existing_job:
+                    logging.info(f"Found batch job after waiting: {existing_job.name}")
+                    return existing_job
+            
+            # Timeout waiting for other process
+            raise TimeoutError(f"Timeout waiting for batch job creation: {batch_id}")
+        
+        # We have the lock, check if job exists
+        existing_job = Job.objects.filter(
+            project=project,
+            batch_id=batch_id
+        ).first()
+        
+        if existing_job:
+            logging.info(f"Found existing batch job: {existing_job.name}")
+            return existing_job
+        
+        # Create new job
+        next_number = _get_next_job_number(project, "Job")
+        
+        logging.info(f"Creating new batch job for batch_id {batch_id}")
+        
+        with transaction.atomic():
+            new_job = Job.objects.create(
+                project=project,
+                batch_id=batch_id,
+                name=f"Job {next_number}",
+                description="Batch created via UI image upload",
+                status="assigned" if user else "unassigned",
+                assignee=user if user else None,
+                image_count=0,
+                created_by=user,
+                updated_by=user,
+            )
+        
+        return new_job
+        
+    finally:
+        # Always release the lock
+        if lock_acquired:
+            cache.delete(lock_key)
 
 def assign_image_to_available_job(
     project_image,
@@ -154,35 +222,11 @@ def assign_uploaded_image_to_batch(
     if existing_assignment:
         logging.info(f"Image already assigned to job {existing_assignment.job.id}")
         return existing_assignment.job
+
+    # Get or create batch job with external lock
+    job = _get_or_create_batch_job(project_image.project, batch_id, user)
     
     with transaction.atomic():
-        existing_job = (
-            Job.objects
-            .filter(project=project_image.project, batch_id=batch_id)
-            .first()
-        )
-        
-        if existing_job:
-            logging.info(f"Found existing job with batch_id {batch_id}: {existing_job.name}")
-            _assign_to_job(project_image, existing_job, user)
-            return existing_job
-        
-        # No existing job, create new one within the same transaction
-        next_number = _get_next_job_number(project_image.project, "Job")
-        
-        logging.info(f"Creating new job for batch_id {batch_id}")
-        
-        new_job = Job.objects.create(
-            project=project_image.project,
-            batch_id=batch_id,
-            name=f"Job {next_number}",
-            description="Batch created via UI image upload",
-            status="assigned" if user else "unassigned",
-            assignee=user if user else None,
-            image_count=0,
-            created_by=user,
-            updated_by=user,
-        )
-        _assign_to_job(project_image, new_job, user)
+        _assign_to_job(project_image, job, user)
     
-    return new_job
+    return job

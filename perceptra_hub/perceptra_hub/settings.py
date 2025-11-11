@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'training',
     'inferences',
     'storage',
+    'activity',
 ]
 
 MIDDLEWARE = [

@@ -45,7 +45,6 @@ class BaseConfig:
     # Queues - Add your custom queues here
     CELERY_TASK_QUEUES = (
         Queue("celery"),           # Default queue
-        Queue("alarm"),            # Alarm processing
         Queue("cleanup"),          # Cleanup tasks
         Queue("kpi_computation"),  # KPI computation
         Queue("maintenance"),      # Maintenance tasks
@@ -74,46 +73,62 @@ class BaseConfig:
     
     # Beat schedule
     CELERY_BEAT_SCHEDULE = {        
-        # Daily KPI computation
-        'compute-daily-kpis': {
-            'task': 'compute_kpis.tasks.core.compute_daily_kpis',
-            'schedule': crontab(hour=2, minute=0),
-            'options': {
-                'queue': 'kpi_computation',
-                'expires': 3600,
-            },
-        },
-        
-        # Weekly KPI computation
-        'compute-weekly-kpis': {
-            'task': 'compute_kpis.tasks.core.compute_weekly_kpis',
-            'schedule': crontab(hour=3, minute=0, day_of_week=1),
-            'options': {
-                'queue': 'kpi_computation',
-                'expires': 7200,
-            },
-        },
-        
-        # Monthly KPI computation
-        'compute-monthly-kpis': {
-            'task': 'compute_kpis.tasks.core.compute_monthly_kpis',
-            'schedule': crontab(hour=4, minute=0, day_of_month=1),
-            'options': {
-                'queue': 'kpi_computation',
-                'expires': 10800,
-            },
-        },
-        
-        # Monthly cleanup
-        'cleanup-old-kpis': {
-            'task': 'compute_kpis.tasks.core.cleanup_old_kpis',
-            'schedule': crontab(hour=5, minute=0, day_of_month=1),
-            'options': {
-                'queue': 'maintenance',
-                'expires': 7200,
-            },
-        },
-    }
+    # Real-time aggregations
+    'aggregate-hourly-metrics': {
+        'task': 'api.activity.tasks.aggregate_hourly_metrics',
+        'schedule': crontab(minute="*/5"),  # Every hour at :05
+    },
+    
+    'aggregate-daily-metrics': {
+        'task': 'api.activity.tasks.aggregate_daily_metrics',
+        'schedule': crontab(hour=0, minute=5),  # Daily at 00:05
+    },
+    
+    'aggregate-weekly-metrics': {
+        'task': 'api.activity.tasks.aggregate_weekly_metrics',
+        'schedule': crontab(day_of_week=1, hour=1, minute=0),  # Monday 01:00
+    },
+    
+    'aggregate-monthly-metrics': {
+        'task': 'api.activity.tasks.aggregate_monthly_metrics',
+        'schedule': crontab(day_of_month=1, hour=2, minute=0),  # 1st of month 02:00
+    },
+    
+    # Project metrics
+    'compute-project-metrics': {
+        'task': 'api.activity.tasks.compute_all_project_metrics',
+        'schedule': crontab(minute='*/15'),  # Every 15 minutes
+    },
+    
+    # Cleanup
+    'cleanup-old-sessions': {
+        'task': 'api.activity.tasks.cleanup_old_sessions',
+        'schedule': crontab(minute=30),  # Every hour at :30
+    },
+    
+    'cleanup-old-events': {
+        'task': 'api.activity.tasks.cleanup_old_events',
+        'schedule': crontab(hour=3, minute=0),  # Daily at 03:00
+    },
+    
+    # Materialized views
+    'refresh-materialized-views': {
+        'task': 'api.activity.tasks.refresh_materialized_views',
+        'schedule': crontab(minute='0,30'),  # Every 30 minutes
+    },
+    
+    # Reports
+    'weekly-reports': {
+        'task': 'api.activity.tasks.generate_weekly_reports',
+        'schedule': crontab(day_of_week=1, hour=6, minute=0),  # Monday 06:00
+    },
+    
+    # Monitoring
+    'health-check': {
+        'task': 'api.activity.tasks.health_check_activity_system',
+        'schedule': crontab(minute='*/15'),  # Every 15 minutes
+    },
+}
 
 
 class DevelopmentConfig(BaseConfig):

@@ -351,6 +351,16 @@ class ProjectImage(models.Model):
         help_text=_('User who reviewed the annotations')
     )
     
+    review_count = models.PositiveIntegerField(
+        default=0,
+        help_text=_('Number of times this image has been reviewed')
+    )
+    
+    last_review_version = models.PositiveIntegerField(
+        default=0,
+        help_text=_('Version number of last review')
+    )
+    
     # Metadata (NEW - flexible additional data)
     metadata = models.JSONField(
         default=dict,
