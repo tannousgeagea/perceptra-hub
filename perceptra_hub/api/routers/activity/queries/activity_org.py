@@ -5,26 +5,356 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 from django.utils import timezone
 from django.db.models import Sum, Avg, Count, Q, Max
+from organizations.models import Organization
 from activity.models import (
-    OrgActivitySummary
+    OrgActivitySummary,
+    UserActivityMetrics,
+    UserSessionActivity,
+    ProjectActivityMetrics,
+    ActivityEvent
 )
 
+from api.routers.activity.schemas import (
+    UserActivitySummary,
+    ProjectProgressSummary,
+    LeaderboardEntry,
+    ActivityTimelineEvent,
+    PredictionQualityMetrics,
+    OrganizationActivitySummary,
+    OrgActivitySummaryResponse
+)
 from uuid import UUID
 from asgiref.sync import sync_to_async
 from api.dependencies import RequestContext, get_request_context
 
 router = APIRouter(prefix="/activity",)
 
-class OrgActivitySummaryResponse(BaseModel):
-    date: date
-    total_events: int
-    active_users: int
-    annotation_events: int
-    image_events: int
-    annotations_created: int
-    images_reviewed: int
-    images_uploaded: int
+@router.get("/organization/summary", response_model=OrganizationActivitySummary)
+async def get_organization_activity_summary(
+    user_id: Optional[str] = Query(None, description="Filter by specific user"),
+    project_id: Optional[UUID] = Query(None, description="Filter by specific project"),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """
+    Get organization-wide activity summary with optional filters.
+    
+    **Use Case**: Executive dashboard, organization overview
+    **Filters**: Can narrow down by user or project
+    """
+    @sync_to_async
+    def fetch_org_summary(org, user_id, project_id, start_date, end_date):
+        
+        if not start_date:
+            start_date = timezone.now() - timedelta(days=30)
+        if not end_date:
+            end_date = timezone.now()
+        
+        # Build base query
+        metrics_query = UserActivityMetrics.objects.filter(
+            organization=org,
+            period_start__gte=start_date,
+            period_end__lte=end_date
+        )
+        
+        # Apply filters
+        if user_id:
+            metrics_query = metrics_query.filter(user_id=user_id)
+        if project_id:
+            metrics_query = metrics_query.filter(project__project_id=project_id)
+        
+        # Aggregate metrics
+        summary = metrics_query.aggregate(
+            total_annotations=Sum('annotations_created'),
+            manual_annotations=Sum('manual_annotations'),
+            ai_edited=Sum('ai_predictions_edited'),
+            ai_accepted=Sum('ai_predictions_accepted'),
+            images_reviewed=Sum('images_reviewed'),
+            images_finalized=Sum('images_finalized'),
+            avg_time=Avg('avg_annotation_time_seconds'),
+            avg_edit_mag=Avg('avg_edit_magnitude'),
+            total_reviews=Sum('images_reviewed'),
+            total_uploads=Sum('images_uploaded'),
+            active_users=Count('user_id', distinct=True),
+    
+        )
+        
+        # Event counts
+        events_query = ActivityEvent.objects.filter(
+            organization=org,
+            timestamp__gte=start_date,
+            timestamp__lt=end_date
+        )
+        
+        if user_id:
+            events_query = events_query.filter(user_id=user_id)
+        if project_id:
+            events_query = events_query.filter(project__project_id=project_id)
+        
+        total_events = events_query.count()
+        
+        # Project stats
+        project_metrics_query = ProjectActivityMetrics.objects.filter(
+            organization=org,
+            period_start__gte=start_date,
+            period_end__lte=end_date
+        )
+        
+        if project_id:
+            project_metrics_query = project_metrics_query.filter(project__project_id=project_id)
+        
+        project_stats = project_metrics_query.aggregate(
+            total_projects=Count('project_id', distinct=True),
+            active_projects=Count('project_id', filter=Q(active_users__gt=0), distinct=True)
+        )
+        
+        # Top performers (if not filtered by user)
+        top_annotator = None
+        top_reviewer = None
+        
+        if not user_id:
+            top_annotator_data = metrics_query.values(
+                'user__id', 'user__username', 'user__first_name', 'user__last_name'
+            ).annotate(
+                total=Sum('annotations_created')
+            ).order_by('-total').first()
+            
+            if top_annotator_data:
+                top_annotator = {
+                    'user_id': str(top_annotator_data['user__id']),
+                    'username': top_annotator_data['user__username'],
+                    'full_name': f"{top_annotator_data['user__first_name']} {top_annotator_data['user__last_name']}".strip(),
+                    'count': top_annotator_data['total']
+                }
+            
+            top_reviewer_data = metrics_query.values(
+                'user__id', 'user__username', 'user__first_name', 'user__last_name'
+            ).annotate(
+                total=Sum('images_reviewed')
+            ).order_by('-total').first()
+            
+            if top_reviewer_data:
+                top_reviewer = {
+                    'user_id': str(top_reviewer_data['user__id']),
+                    'username': top_reviewer_data['user__username'],
+                    'full_name': f"{top_reviewer_data['user__first_name']} {top_reviewer_data['user__last_name']}".strip(),
+                    'count': top_reviewer_data['total']
+                }
+        
+        return OrganizationActivitySummary(
+            organization_id=str(org.id),
+            organization_name=org.name,
+            period={
+                'start': start_date.isoformat(),
+                'end': end_date.isoformat()
+            },
+            total_events=total_events,
+            total_annotations=summary['total_annotations'] or 0,
+            manual_annotations=summary['manual_annotations'] or 0,
+            ai_predictions_edited=summary['ai_edited'] or 0,
+            ai_predictions_accepted=summary['ai_accepted'] or 0,
+            images_reviewed=summary['images_reviewed'] or 0,
+            images_finalized=summary['images_finalized'] or 0,
+            avg_annotation_time_seconds=summary['avg_time'],
+            avg_edit_magnitude=summary['avg_edit_mag'],
+        
+            total_active_users=summary['active_users'] or 0,
+            avg_annotations_per_user=round(
+                (summary['total_annotations'] or 0) / (summary['active_users'] or 1), 2
+            ),
+            
+            total_projects=project_stats['total_projects'] or 0,
+            active_projects=project_stats['active_projects'] or 0,
+            top_annotator=top_annotator,
+            top_reviewer=top_reviewer
+        )
+    
+    return await fetch_org_summary(ctx.organization, user_id, project_id, start_date, end_date)
 
+
+@router.get("/organization/users", response_model=List[UserActivitySummary])
+async def get_organization_users_activity(
+    project_id: Optional[UUID] = Query(None, description="Filter by project"),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    sort_by: str = Query('total_annotations', regex='^(total_annotations|images_reviewed|images_finalized)$'),
+    limit: int = Query(50, ge=1, le=200),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """
+    Get all users' activity in organization with optional project filter.
+    
+    **Use Case**: Team performance dashboard, resource allocation
+    """
+    @sync_to_async
+    def fetch_users_activity(org: Organization, project_id, start_date, end_date, sort_by, limit):        
+        
+        if not start_date:
+            start_date = timezone.now() - timedelta(days=30)
+        if not end_date:
+            end_date = timezone.now()
+        
+        # Build query
+        metrics_query = UserActivityMetrics.objects.filter(
+            organization=org,
+            period_start__gte=start_date,
+            period_end__lte=end_date
+        )
+        
+        if project_id:
+            metrics_query = metrics_query.filter(project__project_id=project_id)
+        
+        # Aggregate by user
+        users_data = metrics_query.values(
+            'user__id', 'user__username', 'user__first_name', 'user__last_name'
+        ).annotate(
+            total_annotations=Sum('annotations_created'),
+            manual_annotations=Sum('manual_annotations'),
+            ai_edited=Sum('ai_predictions_edited'),
+            ai_accepted=Sum('ai_predictions_accepted'),
+            images_reviewed=Sum('images_reviewed'),
+            images_finalized=Sum('images_finalized'),
+            avg_time=Avg('avg_annotation_time_seconds'),
+            avg_edit_mag=Avg('avg_edit_magnitude'),
+            last_activity=Max('last_activity')
+        )
+        
+        # Sort
+        sort_field = {
+            'total_annotations': '-total_annotations',
+            'images_reviewed': '-images_reviewed',
+            'images_finalized': '-images_finalized'
+        }.get(sort_by, '-total_annotations')
+        
+        users_data = users_data.order_by(sort_field)[:limit]
+        
+        # Get session counts for each user
+        result = []
+        for user_data in users_data:
+            session_count = ActivityEvent.objects.filter(
+                user_id=user_data['user__id'],
+                organization=org,
+                timestamp__gte=start_date,
+                timestamp__lte=end_date
+            ).values('session_id').distinct().count()
+            
+            full_name = f"{user_data['user__first_name']} {user_data['user__last_name']}".strip()
+            
+            result.append(UserActivitySummary(
+                user_id=str(user_data['user__id']),
+                username=user_data['user__username'],
+                full_name=full_name or user_data['user__username'],
+                total_annotations=user_data['total_annotations'] or 0,
+                manual_annotations=user_data['manual_annotations'] or 0,
+                ai_predictions_edited=user_data['ai_edited'] or 0,
+                ai_predictions_accepted=user_data['ai_accepted'] or 0,
+                images_reviewed=user_data['images_reviewed'] or 0,
+                images_finalized=user_data['images_finalized'] or 0,
+                avg_annotation_time_seconds=user_data['avg_time'],
+                avg_edit_magnitude=user_data['avg_edit_mag'],
+                last_activity=user_data['last_activity'],
+                total_sessions=session_count
+            ))
+        
+        return result
+    
+    return await fetch_users_activity(ctx.organization, project_id, start_date, end_date, sort_by, limit)
+
+
+@router.get("/organization/projects", response_model=List[ProjectProgressSummary])
+async def get_organization_projects_progress(
+    user_id: Optional[str] = Query(None, description="Filter by user contribution"),
+    status: Optional[str] = Query(None, regex='^(active|completed|stalled)$'),
+    limit: int = Query(50, ge=1, le=200),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """
+    Get all projects progress in organization with optional filters.
+    
+    **Use Case**: Portfolio view, project prioritization
+    **Filters**: 
+    - user_id: Show only projects where user has contributed
+    - status: active (recent activity), completed (>90% done), stalled (no activity 7+ days)
+    """
+    @sync_to_async
+    def fetch_projects_progress(org: Organization, user_id, status, limit):        
+        # Get latest metrics for each project
+        latest_metrics = ProjectActivityMetrics.objects.filter(
+            organization=org,
+            granularity='day'
+        ).values('project_id').annotate(
+            latest_date=Max('period_start')
+        )
+        
+        project_ids = [m['project_id'] for m in latest_metrics]
+        
+        projects_data = []
+        for project_id in project_ids:
+            metric = ProjectActivityMetrics.objects.filter(
+                project_id=project_id,
+                granularity='day'
+            ).order_by('-period_start').first()
+            
+            if not metric:
+                continue
+            
+            # Filter by user contribution
+            if user_id:
+                user_contributed = ActivityEvent.objects.filter(
+                    project_id=project_id,
+                    user_id=user_id
+                ).exists()
+                if not user_contributed:
+                    continue
+            
+            # Calculate status
+            completion = (metric.images_finalized / metric.total_images * 100) if metric.total_images > 0 else 0
+            days_since_activity = (timezone.now().date() - metric.period_start.date()).days
+            
+            project_status = 'active'
+            if completion > 90:
+                project_status = 'completed'
+            elif days_since_activity > 7:
+                project_status = 'stalled'
+            
+            # Filter by status
+            if status and project_status != status:
+                continue
+            
+            total_predictions = (
+                metric.untouched_predictions +
+                metric.edited_predictions +
+                metric.rejected_predictions
+            )
+            acceptance = (
+                (metric.untouched_predictions + metric.edited_predictions) /
+                total_predictions * 100 if total_predictions > 0 else 0
+            )
+            
+            projects_data.append(ProjectProgressSummary(
+                project_id=str(metric.project.project_id),
+                project_name=metric.project.name,
+                total_images=metric.total_images,
+                images_unannotated=metric.images_unannotated,
+                images_annotated=metric.images_annotated,
+                images_reviewed=metric.images_reviewed,
+                images_finalized=metric.images_finalized,
+                completion_percentage=round(completion, 2),
+                untouched_predictions=metric.untouched_predictions,
+                edited_predictions=metric.edited_predictions,
+                rejected_predictions=metric.rejected_predictions,
+                prediction_acceptance_rate=round(acceptance, 2),
+                annotations_per_hour=float(metric.annotations_per_hour) if metric.annotations_per_hour else None,
+                active_contributors=metric.active_users
+            ))
+        
+        # Sort by completion percentage
+        projects_data.sort(key=lambda x: x.completion_percentage, reverse=True)
+        
+        return projects_data[:limit]
+    
+    return await fetch_projects_progress(ctx.organization, user_id, status, limit)
 
 @router.get(
     "/organizations/daily-summary",

@@ -52,19 +52,33 @@ def update_user_metrics_async(self, user_id, organization_id, event_type, projec
         
         if event_type == ActivityEventType.ANNOTATION_CREATE:
             metrics.annotations_created = F('annotations_created') + 1
-            # Check if manual or prediction from event metadata
-            event = ActivityEvent.objects.filter(
+            update_fields.extend(['annotations_created'])
+            
+            avg_time = ActivityEvent.objects.filter(
                 user=user,
-                event_type=event_type,
+                organization=org,
+                event_type=ActivityEventType.ANNOTATION_CREATE,
+                timestamp__gte=today,
+                timestamp__lt=today + timedelta(days=1),
+                duration_ms__isnull=False,
+                metadata__annotation_source='manual'
+            ).aggregate(avg=Avg('duration_ms'))
+            
+            if avg_time['avg']:
+                metrics.avg_annotation_time_seconds = round(avg_time['avg'] / 1000, 2)
+                update_fields.append('avg_annotation_time_seconds')
+            
+            # Check if manual from latest event
+            latest_event = ActivityEvent.objects.filter(
+                user=user,
+                event_type=ActivityEventType.ANNOTATION_CREATE,
                 timestamp__gte=today
             ).order_by('-timestamp').first()
             
-            if event and event.metadata.get('annotation_source') == 'manual':
+            if latest_event and latest_event.metadata.get('annotation_source') == 'manual':
                 metrics.manual_annotations = F('manual_annotations') + batch_count
                 update_fields.append('manual_annotations')
-            
-            update_fields.append('annotations_created')
-            
+                
         elif event_type == ActivityEventType.ANNOTATION_UPDATE:
             metrics.annotations_updated = F('annotations_updated') + batch_count
             update_fields.append('annotations_updated')

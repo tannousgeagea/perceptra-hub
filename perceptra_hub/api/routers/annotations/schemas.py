@@ -10,6 +10,7 @@ class AnnotationCreate(BaseModel):
     annotation_uid: Optional[str] = None
     annotation_source: str = Field(default="manual", pattern="^(manual|prediction)$")
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
+    annotation_time_seconds: Optional[float] = None
     
     class Config:
         json_schema_extra = {

@@ -118,7 +118,7 @@ async def create_annotation(
                 created = False
             else:   
                 # Create annotation
-                annotation = Annotation.objects.create(
+                annotation = Annotation(
                     project_image=project_image,
                     annotation_type=annotation_type,
                     annotation_class=annotation_class,
@@ -130,6 +130,11 @@ async def create_annotation(
                     updated_by=user
                 )
                 created = True
+                
+                if data.annotation_time_seconds:
+                    annotation._duration_seconds = data.annotation_time_seconds
+                
+                annotation.save()
                 
             # Update project image status
             if not project_image.annotated:

@@ -113,10 +113,13 @@ def track_image_project_assignment(sender, instance, created, **kwargs):
 @receiver(post_save, sender=Annotation)
 def track_annotation_activity(sender, instance, created, **kwargs):
     """Track annotation creation and updates."""
-    
+    import logging
     # Determine event type
+    duration_ms = None
     if created:
         event_type = ActivityEventType.ANNOTATION_CREATE
+        if hasattr(instance, '_duration_seconds'):
+            duration_ms = int(instance._duration_seconds * 1000)
     elif instance.is_deleted:
         event_type = ActivityEventType.ANNOTATION_DELETE
     else:
@@ -151,7 +154,8 @@ def track_annotation_activity(sender, instance, created, **kwargs):
         event_type=event_type,
         user=instance.updated_by or instance.created_by,
         project=instance.project_image.project,
-        metadata=metadata
+        metadata=metadata,
+        duration_ms=duration_ms
     )
     
     # Trigger async metric update

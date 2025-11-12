@@ -12,95 +12,19 @@ from activity.models import (
     ActivityEventType
 )
 
+from api.routers.activity.schemas import (
+    UserActivitySummary,
+    ProjectProgressSummary,
+    LeaderboardEntry,
+    ActivityTimelineEvent,
+    PredictionQualityMetrics,
+)
+
 from uuid import UUID
 from asgiref.sync import sync_to_async
 from api.dependencies import RequestContext, get_request_context
 
 router = APIRouter(prefix="/activity",)
-
-
-# ============================================================================
-# RESPONSE MODELS
-# ============================================================================
-
-class UserActivitySummary(BaseModel):
-    user_id: str
-    username: str
-    full_name: str
-    
-    # Annotation metrics
-    total_annotations: int
-    manual_annotations: int
-    ai_predictions_edited: int
-    ai_predictions_accepted: int
-    
-    # Review metrics
-    images_reviewed: int
-    images_finalized: int
-    
-    # Quality metrics
-    avg_annotation_time_seconds: Optional[float]
-    avg_edit_magnitude: Optional[float]
-    
-    # Activity
-    last_activity: Optional[datetime]
-    total_sessions: int
-
-
-class ProjectProgressSummary(BaseModel):
-    project_id: str
-    project_name: str
-    
-    # Progress breakdown
-    total_images: int
-    images_unannotated: int
-    images_annotated: int
-    images_reviewed: int
-    images_finalized: int
-    completion_percentage: float
-    
-    # Quality insights
-    untouched_predictions: int
-    edited_predictions: int
-    rejected_predictions: int
-    prediction_acceptance_rate: float
-    
-    # Velocity
-    annotations_per_hour: Optional[float]
-    active_contributors: int
-
-
-class ActivityTimelineEvent(BaseModel):
-    event_id: str
-    event_type: str
-    user: str
-    timestamp: datetime
-    project: Optional[str]
-    metadata: dict
-
-
-class LeaderboardEntry(BaseModel):
-    rank: int
-    user_id: str
-    username: str
-    full_name: str
-    metric_value: int
-    percentage_of_total: float
-
-
-class PredictionQualityMetrics(BaseModel):
-    total_predictions: int
-    untouched: int
-    accepted_without_edit: int
-    minor_edits: int
-    major_edits: int
-    class_changes: int
-    rejected: int
-    
-    # Percentages
-    untouched_percentage: float
-    acceptance_rate: float
-    avg_edit_magnitude: Optional[float]
 
 
 # ============================================================================
@@ -141,7 +65,7 @@ async def get_user_activity_summary(
         
         # Query aggregated metrics
         metrics = UserActivityMetrics.objects.filter(
-            user_id=user_id,
+            # user_id=user_id,
             organization=ctx.organization,
             period_start__gte=start_date,
             period_end__lte=end_date
@@ -167,7 +91,7 @@ async def get_user_activity_summary(
         
         # Get session count
         session_count = ActivityEvent.objects.filter(
-            user_id=user_id,
+            # user_id=user_id,
             organization=ctx.organization,
             timestamp__gte=start_date,
             timestamp__lte=end_date
