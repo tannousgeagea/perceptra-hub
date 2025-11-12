@@ -76,6 +76,14 @@ def track_image_upload(sender, instance, created, **kwargs):
             }
         )
 
+        # Trigger async metric update
+        transaction.on_commit(lambda: update_user_metrics_async.delay(
+            user_id=instance.uploaded_by_id,
+            organization_id=instance.organization_id,
+            event_type=ActivityEventType.IMAGE_UPLOAD,
+        ))
+
+
 
 @receiver(post_save, sender=ProjectImage)
 def track_image_project_assignment(sender, instance, created, **kwargs):
@@ -92,6 +100,14 @@ def track_image_project_assignment(sender, instance, created, **kwargs):
                 'status': instance.status,
             }
         )
+
+        # Trigger async metric update
+        transaction.on_commit(lambda: update_user_metrics_async.delay(
+            user_id=instance.added_by_id or instance.added_by_id,
+            organization_id=instance.project.organization_id,
+            event_type=ActivityEventType.IMAGE_ADD_TO_PROJECT,
+            project_id=instance.project.id,
+        ))
 
 
 @receiver(post_save, sender=Annotation)
@@ -142,15 +158,14 @@ def track_annotation_activity(sender, instance, created, **kwargs):
     transaction.on_commit(lambda: update_user_metrics_async.delay(
         user_id=instance.updated_by_id or instance.created_by_id,
         organization_id=instance.project_image.project.organization_id,
-        event_type=event_type
+        event_type=event_type,
+        project_id=instance.project_image.project.id,
     ))
 
 
 @receiver(post_save, sender=ProjectImage)
 def track_image_status_changes(sender, instance, created, update_fields, **kwargs):
     """Track review, approval, and finalization."""
-    import logging  
-    logging.warning(update_fields)
     if created or not update_fields:
         return
     
@@ -159,6 +174,7 @@ def track_image_status_changes(sender, instance, created, update_fields, **kwarg
         
         # Image reviewed
         if instance.reviewed and 'reviewed' in update_fields:
+            event_type = ActivityEventType.IMAGE_REVIEW
             create_activity_event(
                 organization=instance.project.organization,
                 event_type=ActivityEventType.IMAGE_REVIEW,
@@ -170,9 +186,18 @@ def track_image_status_changes(sender, instance, created, update_fields, **kwarg
                     'approved': instance.status == 'approved',
                 }
             )
+
+            # Trigger async metric update
+            transaction.on_commit(lambda: update_user_metrics_async.delay(
+                user_id=instance.reviewed_by_id or instance.added_by_id,
+                organization_id=instance.project.organization_id,
+                event_type=event_type,
+                project_id=instance.project.id,
+            ))
         
         # Image finalized
         if instance.finalized and 'finalized' in update_fields:
+            event_type = ActivityEventType.IMAGE_FINALIZE
             create_activity_event(
                 organization=instance.project.organization,
                 event_type=ActivityEventType.IMAGE_FINALIZE,
@@ -182,6 +207,14 @@ def track_image_status_changes(sender, instance, created, update_fields, **kwarg
                     'project_image_id': instance.id,
                 }
             )
+            
+            # Trigger async metric update
+            transaction.on_commit(lambda: update_user_metrics_async.delay(
+                user_id=instance.reviewed_by_id or instance.added_by_id,
+                organization_id=instance.project.organization_id,
+                event_type=event_type,
+                project_id=instance.project.id,
+            ))
 
 @receiver(post_delete, sender=ProjectImage)
 def track_image_project_removal(sender, instance, **kwargs):

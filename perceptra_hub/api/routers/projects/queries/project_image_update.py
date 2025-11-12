@@ -271,7 +271,9 @@ async def finalize_for_dataset(
         
         project_image.finalized = True
         project_image.status = 'dataset'
-        project_image.save()
+        project_image.save(
+            update_fields=['finalized', 'status']
+        )
         
         return project_image
     
@@ -379,12 +381,21 @@ async def batch_finalize_images(
                 status='dataset'
             )
             
-            return count, invalid_ids
+            return count, invalid_ids, list(project_images.values_list('id', flat=True))
     
-    count, invalid_ids = await batch_finalize(
+    count, invalid_ids, finalized_ids = await batch_finalize(
         project_ctx.project,
         project_image_ids
     )
+    
+    # Trigger async event creation
+    if finalized_ids:
+        from api.tasks.activity import create_batch_finalize_events
+        create_batch_finalize_events.delay(
+            project_id=str(project_id),
+            project_image_ids=finalized_ids,
+            user_id=project_ctx.user.id,
+        )
     
     return {
         "message": f"Finalized {count} images for dataset",

@@ -367,6 +367,33 @@ class ProjectActivityMetrics(models.Model):
         return f"{self.project.name} - {self.period_start.date()}"
 
 
+class OrgActivitySummary(models.Model):
+    """
+    Read-only model for materialized view.
+    DO NOT use .save(), .create(), or .update() - data is managed by PostgreSQL.
+    """
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.DO_NOTHING,
+        db_column='organization_id'
+    )
+    date = models.DateField()
+    total_events = models.IntegerField()
+    active_users = models.IntegerField()
+    annotation_events = models.IntegerField()
+    image_events = models.IntegerField()
+    annotations_created = models.IntegerField()
+    images_reviewed = models.IntegerField()
+    images_uploaded = models.IntegerField()
+
+    class Meta:
+        managed = False  # Django won't create/modify this table
+        db_table = 'org_activity_summary'
+        ordering = ['-date']
+
+    def __str__(self):
+        return f"{self.organization.name} - {self.date}"
+
 # ============================================================================
 # 3. REAL-TIME COUNTERS (Atomic Operations)
 # ============================================================================

@@ -1,6 +1,7 @@
 # apps/activity/tasks.py
 from celery import shared_task
-from django.db.models import Count, Avg, Sum, F, Q, Max
+from django.db.models import Count, Avg, Sum, F, Q, Max, FloatField
+from django.db.models.functions import Cast
 from django.utils import timezone
 from datetime import timedelta, datetime
 from activity.models import (
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 @shared_task(bind=True, max_retries=3)
-def update_user_metrics_async(self, user_id, organization_id, event_type, project_id=None):
+def update_user_metrics_async(self, user_id, organization_id, event_type, project_id=None,  batch_count=1):
     """
     Incrementally update user metrics after each event.
     Falls back to full recalculation if increment fails.
@@ -59,49 +60,49 @@ def update_user_metrics_async(self, user_id, organization_id, event_type, projec
             ).order_by('-timestamp').first()
             
             if event and event.metadata.get('annotation_source') == 'manual':
-                metrics.manual_annotations = F('manual_annotations') + 1
+                metrics.manual_annotations = F('manual_annotations') + batch_count
                 update_fields.append('manual_annotations')
             
             update_fields.append('annotations_created')
             
         elif event_type == ActivityEventType.ANNOTATION_UPDATE:
-            metrics.annotations_updated = F('annotations_updated') + 1
+            metrics.annotations_updated = F('annotations_updated') + batch_count
             update_fields.append('annotations_updated')
             
         elif event_type == ActivityEventType.ANNOTATION_DELETE:
-            metrics.annotations_deleted = F('annotations_deleted') + 1
+            metrics.annotations_deleted = F('annotations_deleted') + batch_count
             update_fields.append('annotations_deleted')
             
         elif event_type == ActivityEventType.IMAGE_REVIEW:
-            metrics.images_reviewed = F('images_reviewed') + 1
+            metrics.images_reviewed = F('images_reviewed') + batch_count
             update_fields.append('images_reviewed')
             
         elif event_type == ActivityEventType.IMAGE_FINALIZE:
-            metrics.images_finalized = F('images_finalized') + 1
+            metrics.images_finalized = F('images_finalized') + batch_count
             update_fields.append('images_finalized')
             
         elif event_type == ActivityEventType.PREDICTION_ACCEPT:
-            metrics.ai_predictions_accepted = F('ai_predictions_accepted') + 1
+            metrics.ai_predictions_accepted = F('ai_predictions_accepted') + batch_count
             update_fields.append('ai_predictions_accepted')
             
         elif event_type == ActivityEventType.PREDICTION_EDIT:
-            metrics.ai_predictions_edited = F('ai_predictions_edited') + 1
+            metrics.ai_predictions_edited = F('ai_predictions_edited') + batch_count
             update_fields.append('ai_predictions_edited')
             
         elif event_type == ActivityEventType.PREDICTION_REJECT:
-            metrics.ai_predictions_rejected = F('ai_predictions_rejected') + 1
+            metrics.ai_predictions_rejected = F('ai_predictions_rejected') + batch_count
             update_fields.append('ai_predictions_rejected')
             
         elif event_type == ActivityEventType.IMAGE_UPLOAD:
-            metrics.images_uploaded = F('images_uploaded') + 1
+            metrics.images_uploaded = F('images_uploaded') + batch_count
             update_fields.append('images_uploaded')
             
         elif event_type == ActivityEventType.IMAGE_ADD_TO_PROJECT:
-            metrics.images_added_to_project = F('images_added_to_project') + 1
+            metrics.images_added_to_project = F('images_added_to_project') + batch_count
             update_fields.append('images_added_to_project')
             
         elif event_type == ActivityEventType.JOB_COMPLETE:
-            metrics.jobs_completed = F('jobs_completed') + 1
+            metrics.jobs_completed = F('jobs_completed') + batch_count
             update_fields.append('jobs_completed')
         
         metrics.last_activity = timezone.now()
@@ -350,7 +351,9 @@ def compute_user_metrics_for_period(user_id, organization_id, project_id, start,
         event_type=ActivityEventType.IMAGE_UPLOAD
     ).aggregate(
         count=Count('event_id'),
-        total_size=Sum('metadata__file_size_mb')
+        total_size=Sum(
+            Cast(F('metadata__file_size_mb'), FloatField())
+        )
     )
     
     # Get avg annotation time from duration_ms
@@ -364,7 +367,9 @@ def compute_user_metrics_for_period(user_id, organization_id, project_id, start,
         event_type=ActivityEventType.PREDICTION_EDIT,
         metadata__edit_magnitude__isnull=False
     ).aggregate(
-        avg=Avg('metadata__edit_magnitude')
+        avg=Avg(
+            Cast(F('metadata__edit_magnitude'), FloatField())
+        )
     )
     
     # Get last activity
@@ -754,3 +759,52 @@ def health_check_activity_system():
         'issues': issues,
         'timestamp': timezone.now().isoformat()
     }
+    
+@shared_task(bind=True, max_retries=3)
+def create_batch_finalize_events(self, project_id, project_image_ids, user_id):
+    """Create activity events for batch finalized images."""
+    try:
+        from projects.models import Project, ProjectImage
+        from django.contrib.auth import get_user_model
+        from activity.signals import create_activity_event
+        from activity.models import ActivityEventType
+        import uuid
+        
+        User = get_user_model()
+        
+        project = Project.objects.get(project_id=project_id)
+        user = User.objects.get(id=user_id)
+        session_id = uuid.uuid4()
+        
+        # Batch create events
+        events = []
+        for img_id in project_image_ids:
+            events.append(
+                create_activity_event(
+                    organization=project.organization,
+                    event_type=ActivityEventType.IMAGE_FINALIZE,
+                    user=user,
+                    project=project,
+                    session_id=session_id,
+                    metadata={
+                        'project_image_id': img_id,
+                        'batch_operation': True,
+                        'batch_size': len(project_image_ids)
+                    }
+                )
+            )
+        
+        logger.info(f"Created {len(events)} finalize events for batch operation")
+        
+        # Update user metrics (single update for entire batch)
+        update_user_metrics_async.delay(
+            user_id=user_id,
+            organization_id=str(project.organization_id),
+            event_type=ActivityEventType.IMAGE_FINALIZE,
+            project_id=project.id,
+            batch_count=len(project_image_ids)  # Pass batch size
+        )
+        
+    except Exception as exc:
+        logger.error(f"Failed to create batch events: {exc}")
+        raise self.retry(exc=exc, countdown=2 ** self.request.retries)
