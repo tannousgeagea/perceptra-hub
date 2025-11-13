@@ -18,11 +18,13 @@ from api.routers.activity.schemas import (
     LeaderboardEntry,
     ActivityTimelineEvent,
     PredictionQualityMetrics,
+    ActivityTrendPoint
 )
 
 from uuid import UUID
 from asgiref.sync import sync_to_async
 from api.dependencies import RequestContext, get_request_context
+from api.dependencies import ProjectContext, get_project_context
 
 router = APIRouter(prefix="/activity",)
 
@@ -117,6 +119,95 @@ async def get_user_activity_summary(
         )
     return await fetch_user_activity_summary(
         ctx, user_id, project_id, start_date, end_date
+    )
+
+
+@router.get("/projects/{project_id}/summary", response_model=UserActivitySummary)
+async def get_user_activity_summary(
+    project_id: UUID,
+    user_id: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    ctx: ProjectContext = Depends(get_project_context)  # Your auth dependency
+):
+    """
+    Get comprehensive activity summary for a user.
+    
+    **Optimized Query**: Uses pre-aggregated metrics table.
+    """
+    @sync_to_async
+    def fetch_user_activity_summary(
+        ctx: ProjectContext, 
+        user_id: Optional[str] = None,
+        start_date:Optional[datetime] = None, 
+        end_date:Optional[datetime] = None
+    ):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        
+        # Default to last 30 days
+        if not start_date:
+            start_date = timezone.now() - timedelta(days=30)
+        if not end_date:
+            end_date = timezone.now()
+        
+        # Query aggregated metrics
+        metrics = UserActivityMetrics.objects.filter(
+            project=ctx.project,
+            organization=ctx.organization,
+            period_start__gte=start_date,
+            period_end__lte=end_date
+        )
+        
+        if user_id:
+            metrics = metrics.filter(user_id=user_id)
+        
+        # Aggregate across time periods
+        summary = metrics.aggregate(
+            total_annotations=Sum('annotations_created'),
+            manual_annotations=Sum('manual_annotations'),
+            ai_edited=Sum('ai_predictions_edited'),
+            ai_accepted=Sum('ai_predictions_accepted'),
+            images_reviewed=Sum('images_reviewed'),
+            images_finalized=Sum('images_finalized'),
+            avg_time=Avg('avg_annotation_time_seconds'),
+            avg_edit_mag=Avg('avg_edit_magnitude'),
+        )
+        
+        # Get user info
+        if user_id:
+            user = User.objects.get(id=user_id)
+        else:
+            user = ctx.user
+        
+        # Get session count
+        session_count = ActivityEvent.objects.filter(
+            # user_id=user_id,
+            organization=ctx.organization,
+            timestamp__gte=start_date,
+            timestamp__lte=end_date
+        ).values('session_id').distinct().count()
+        
+        # Get last activity
+        last_activity = metrics.aggregate(last=Max('last_activity'))['last']
+        
+        return UserActivitySummary(
+            user_id=str(user.id),
+            username=user.username,
+            full_name=user.get_full_name() or user.username,
+            total_annotations=summary['total_annotations'] or 0,
+            manual_annotations=summary['manual_annotations'] or 0,
+            ai_predictions_edited=summary['ai_edited'] or 0,
+            ai_predictions_accepted=summary['ai_accepted'] or 0,
+            images_reviewed=summary['images_reviewed'] or 0,
+            images_finalized=summary['images_finalized'] or 0,
+            avg_annotation_time_seconds=summary['avg_time'],
+            avg_edit_magnitude=summary['avg_edit_mag'],
+            last_activity=last_activity,
+            total_sessions=session_count
+        )
+    return await fetch_user_activity_summary(
+        ctx, user_id, start_date, end_date
     )
 
 
@@ -442,11 +533,12 @@ async def get_prediction_quality_metrics(
     )
 
 
-@router.get("/activity-heatmap")
+@router.get("/projects/{project_id}/heatmap")
 async def get_activity_heatmap(
+    project_id: UUID,
     start_date: datetime,
     end_date: datetime,
-    ctx: RequestContext = Depends(get_request_context),
+    ctx: ProjectContext = Depends(get_project_context),
 ):
     """
     Get hourly activity heatmap for visualization.
@@ -462,12 +554,13 @@ async def get_activity_heatmap(
 ```
     """
     @sync_to_async
-    def fetch_activity_heatmap(ctx: RequestContext, start_date: datetime, end_date: datetime):
+    def fetch_activity_heatmap(ctx: ProjectContext, start_date: datetime, end_date: datetime):
         from django.db.models.functions import TruncHour, TruncDate
         
         # Aggregate by hour
         hourly_counts = ActivityEvent.objects.filter(
             organization=ctx.organization,
+            project=ctx.project,
             timestamp__gte=start_date,
             timestamp__lte=end_date
         ).annotate(
@@ -493,3 +586,54 @@ async def get_activity_heatmap(
     return await fetch_activity_heatmap(
         ctx, start_date, end_date
     )
+
+@router.get("/projects/{project_id}/activity-trend", response_model=List[ActivityTrendPoint])
+async def get_project_activity_trend(
+    project_id: UUID,
+    user_id: Optional[str] = Query(None, description="Filter by user"),
+    days: int = Query(30, ge=7, le=365),
+    ctx: ProjectContext = Depends(get_project_context),
+):
+    """
+    Get daily activity trend for a specific project.
+    
+    **Use Case**: Project progress charts
+    """
+    @sync_to_async
+    def fetch_project_trend(ctx, user_id, days):
+        from django.db.models.functions import TruncDate        
+        start_date = timezone.now() - timedelta(days=days)
+        
+        # Build query
+        events_query = ActivityEvent.objects.filter(
+            project=ctx.project,
+            timestamp__gte=start_date
+        )
+        
+        if user_id:
+            events_query = events_query.filter(user_id=user_id)
+        
+        # Aggregate by date
+        daily_data = events_query.annotate(
+            date=TruncDate('timestamp')
+        ).values('date').annotate(
+            annotations=Count('event_id', filter=Q(event_type=ActivityEventType.ANNOTATION_CREATE)),
+            reviews=Count('event_id', filter=Q(event_type=ActivityEventType.IMAGE_REVIEW)),
+            uploads=Count('event_id', filter=Q(event_type=ActivityEventType.IMAGE_ADD_TO_PROJECT)),
+            active_users=Count('user_id', distinct=True)
+        ).order_by('date')
+        
+        # Format response
+        trend = []
+        for entry in daily_data:
+            trend.append(ActivityTrendPoint(
+                date=entry['date'].strftime('%b %d'),
+                annotations=entry['annotations'],
+                reviews=entry['reviews'],
+                uploads=entry['uploads'],
+                active_users=entry['active_users']
+            ))
+        
+        return trend
+    
+    return await fetch_project_trend(ctx, user_id, days)

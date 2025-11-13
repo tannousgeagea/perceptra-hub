@@ -123,3 +123,10 @@ class OrganizationActivitySummary(BaseModel):
     # Top performers
     top_annotator: Optional[dict]
     top_reviewer: Optional[dict]
+    
+class ActivityTrendPoint(BaseModel):
+    date: str
+    annotations: int
+    reviews: int
+    uploads: int
+    active_users: int
