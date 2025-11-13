@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'training',
     'inferences',
     'storage',
+    'activity',
 ]
 
 MIDDLEWARE = [
@@ -346,6 +347,40 @@ UNFOLD = {
                             ),
                     },
                 ],
+            },
+            {
+                "title": _("Activities"),
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": _("Activity Events"),
+                        "icon": "activity_zone",
+                        "link": reverse_lazy(
+                            "admin:activity_activityevent_changelist"
+                            ),
+                    },  
+                    {
+                        "title": _("User Activity Metrics"),
+                        "icon": "web_traffic",
+                        "link": reverse_lazy(
+                            "admin:activity_useractivitymetrics_changelist"
+                            ),
+                    },  
+                    {
+                        "title": _("Project Activity Metrics"),
+                        "icon": "folder_code",
+                        "link": reverse_lazy(
+                            "admin:activity_projectactivitymetrics_changelist"
+                            ),
+                    },  
+                    {
+                        "title": _("User Session Activity"),
+                        "icon": "user_attributes",
+                        "link": reverse_lazy(
+                            "admin:activity_usersessionactivity_changelist"
+                            ),
+                    },  
+                ]  
             },
             {
                 "title": _("MetaData"),

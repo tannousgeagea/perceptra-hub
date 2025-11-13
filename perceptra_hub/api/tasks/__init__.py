@@ -1,4 +1,5 @@
 from . import (
     annotation_audit, 
-    dataset_export
+    dataset_export,
+    activity
 )

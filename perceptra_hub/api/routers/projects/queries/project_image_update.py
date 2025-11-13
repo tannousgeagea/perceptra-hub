@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 import logging
 from asgiref.sync import sync_to_async
 import uuid
-
+from django.db.models import F
 from api.dependencies import get_project_context, ProjectContext
 from api.routers.projects.schemas import ProjectImageStatusUpdate, SplitDatasetRequest, SplitDatasetResponse
 from projects.models import ProjectImage
@@ -53,35 +53,72 @@ async def review_project_image(
                 detail="Project image not found"
             )
         
-        # Update review status
+        # Prevent duplicate review of same state
+        if project_image.reviewed and project_image.status == 'reviewed':
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Image already {project_image.status}"
+            )
+        
+        # Update review fields
         project_image.reviewed = True
         project_image.status = 'approved' if approved else 'rejected'
         project_image.reviewed_by = user
         project_image.reviewed_at = timezone.now()
         
-        # updatre annotation to reviewed
+        update_fields = ['reviewed', 'status', 'reviewed_by', 'reviewed_at', 'updated_at']
+        
+        # Track review history in metadata
+        if not project_image.metadata:
+            project_image.metadata = {}
+        if 'review_history' not in project_image.metadata:
+            project_image.metadata['review_history'] = []
+        
+        project_image.metadata['review_history'].append({
+            'approved': approved,
+            'reviewed_by': user.username,
+            'reviewed_at': timezone.now().isoformat(),
+            'feedback': feedback
+        })
+        
+        update_fields.append('metadata')
+        
+        if feedback:
+            project_image.feedback_provided = True
+            update_fields.append('feedback_provided')
+        
+        # IMPORTANT: Save with update_fields to trigger signal
+        project_image.save(update_fields=update_fields)
+        
+        # Then increment counters using F() at database level
+        ProjectImage.objects.filter(id=project_image.id).update(
+            review_count=F('review_count') + 1,
+            last_review_version=F('last_review_version') + 1
+        )
+        
+        # Refresh to get updated values
+        project_image.refresh_from_db()
+            
+        # Update annotations
         Annotation.objects.filter(
             project_image=project_image,
             is_active=True
         ).update(
-            reviewed=True, 
-            reviewed_by=user, 
+            reviewed=True,
+            reviewed_by=user,
             reviewed_at=timezone.now()
         )
         
-        # Add feedback to metadata
-        if feedback:
-            if not project_image.metadata:
-                project_image.metadata = {}
-            project_image.metadata['review_feedback'] = feedback
-            project_image.metadata['reviewed_at'] = timezone.now().isoformat()
-            project_image.feedback_provided = True
-        
-        project_image.save()
-        
-        return project_image
+        return {
+            "message": f"Image {'approved' if approved else 'rejected'} successfully",
+            "project_image_id": str(project_image.id),
+            "status": project_image.status,
+            "reviewed": project_image.reviewed,
+            "reviewed_by": project_image.reviewed_by.username if project_image.reviewed_by else None,
+            "reviewed_at": project_image.reviewed_at.isoformat() if project_image.reviewed_at else None
+        }
     
-    project_image = await review_image(
+    return await review_image(
         project_ctx.project,
         project_image_id,
         approved,
@@ -89,14 +126,6 @@ async def review_project_image(
         project_ctx.user
     )
     
-    return {
-        "message": f"Image {'approved' if approved else 'rejected'} successfully",
-        "project_image_id": str(project_image.id),
-        "status": project_image.status,
-        "reviewed": project_image.reviewed,
-        "reviewed_by": project_image.reviewed_by.username if project_image.reviewed_by else None,
-        "reviewed_at": project_image.reviewed_at.isoformat() if project_image.reviewed_at else None
-    }
 
 
 @router.patch(
@@ -242,7 +271,9 @@ async def finalize_for_dataset(
         
         project_image.finalized = True
         project_image.status = 'dataset'
-        project_image.save()
+        project_image.save(
+            update_fields=['finalized', 'status']
+        )
         
         return project_image
     
@@ -350,12 +381,21 @@ async def batch_finalize_images(
                 status='dataset'
             )
             
-            return count, invalid_ids
+            return count, invalid_ids, list(project_images.values_list('id', flat=True))
     
-    count, invalid_ids = await batch_finalize(
+    count, invalid_ids, finalized_ids = await batch_finalize(
         project_ctx.project,
         project_image_ids
     )
+    
+    # Trigger async event creation
+    if finalized_ids:
+        from api.tasks.activity import create_batch_finalize_events
+        create_batch_finalize_events.delay(
+            project_id=str(project_id),
+            project_image_ids=finalized_ids,
+            user_id=project_ctx.user.id,
+        )
     
     return {
         "message": f"Finalized {count} images for dataset",

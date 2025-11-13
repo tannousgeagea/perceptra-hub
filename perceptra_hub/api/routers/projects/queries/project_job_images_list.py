@@ -59,7 +59,7 @@ async def list_job_images(
         queryset = JobImage.objects.filter(
             job=job,
             project_image__is_active=True
-        ).select_related('project_image')
+        ).select_related('project_image').order_by('id')
         
         annotated_count = queryset.filter(project_image__status='annotated').count()
         reviewed_count = queryset.filter(project_image__status='reviewed').count()

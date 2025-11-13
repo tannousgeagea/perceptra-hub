@@ -81,7 +81,7 @@ async def list_project_images(
         queryset = ProjectImage.objects.filter(
             project=project,
             is_active=True
-        )
+        ).order_by('id')
         
         if query:
             filters = parse_project_image_query(query)
