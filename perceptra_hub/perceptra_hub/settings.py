@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 import os
+from os import getenv as env
 from pathlib import Path
 from django.templatetags.static import static
 from django.urls import reverse_lazy
@@ -57,6 +58,7 @@ INSTALLED_APPS = [
     'inferences',
     'storage',
     'activity',
+    'authentication',
 ]
 
 MIDDLEWARE = [
@@ -130,6 +132,18 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+# Microsoft OAuth Configuration
+MICROSOFT_CLIENT_ID = env('MICROSOFT_CLIENT_ID', default='')
+MICROSOFT_CLIENT_SECRET = env('MICROSOFT_CLIENT_SECRET', default='')
+MICROSOFT_TENANT_ID = env('MICROSOFT_TENANT_ID', default='common')  # 'common' allows personal + work accounts
+MICROSOFT_REDIRECT_URI = env('MICROSOFT_REDIRECT_URI', default='http://localhost:3000/auth/microsoft/callback')
+
+# OAuth URLs
+MICROSOFT_AUTHORITY_URL = f"https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}"
+MICROSOFT_AUTHORIZATION_URL = f"{MICROSOFT_AUTHORITY_URL}/oauth2/v2.0/authorize"
+MICROSOFT_TOKEN_URL = f"{MICROSOFT_AUTHORITY_URL}/oauth2/v2.0/token"
+MICROSOFT_GRAPH_URL = "https://graph.microsoft.com/v1.0/me"
 
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = "smtp.office365.com"
