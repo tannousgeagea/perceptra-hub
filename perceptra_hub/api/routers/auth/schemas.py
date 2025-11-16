@@ -1,10 +1,9 @@
 """
 Pydantic schemas for authentication endpoints.
 """
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field, validator, HttpUrl
 from typing import Optional, List
 from datetime import datetime
-
 
 # ============= Registration Schemas =============
 
@@ -224,3 +223,32 @@ class ErrorResponse(BaseModel):
                 "detail": "Invalid username or password"
             }
         }
+        
+
+# ============= OAuth Schemas =============
+
+class OAuthInitiateRequest(BaseModel):
+    """Request to initiate OAuth flow."""
+    provider: str  # 'microsoft' or 'google'
+
+class OAuthInitiateResponse(BaseModel):
+    """Response with OAuth authorization URL."""
+    authorization_url: str
+    state: str  # Client should store this for verification
+
+class OAuthCallbackRequest(BaseModel):
+    """OAuth callback with authorization code."""
+    code: str
+    state: str
+    provider: str  # 'microsoft' or 'google'
+
+class OAuthUserInfo(BaseModel):
+    """User information from OAuth provider."""
+    provider: str
+    provider_user_id: str
+    email: str
+    first_name: Optional[str] = ""
+    last_name: Optional[str] = ""
+    picture: Optional[str] = None
+
+# TokenResponse already exists in your schemas, we'll reuse it
