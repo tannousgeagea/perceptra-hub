@@ -8,6 +8,9 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
+from organizations.models import Organization
+from memberships.models import OrganizationMembership, Role
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -178,10 +181,10 @@ class OAuthStateManager:
             State token
         """
         state = secrets.token_urlsafe(32)
-        cls._states[state] = {
-            "created_at": datetime.now(),
+        cache.set(f"oauth_state:{state}", {
+            "created_at": datetime.now().isoformat(),
             "data": user_data or {}
-        }
+        }, timeout=600)
         return state
     
     @classmethod
@@ -222,23 +225,15 @@ class OAuthStateManager:
         Returns:
             True if valid, False otherwise
         """
-        if state not in cls._states:
-            return False
         
-        # Check if expired (10 minutes)
-        state_data = cls._states[state]
-        age = datetime.now() - state_data["created_at"]
-        
-        if age > timedelta(minutes=10):
-            cls.remove_state(state)
-            return False
-        
-        return True
+        state_data = cache.get(f"oauth_state:{state}")
+        logger.warning(f"State Data: {state_data}")
+        return state_data is not None
     
     @classmethod
     def remove_state(cls, state: str):
         """Remove state token after use."""
-        cls._states.pop(state, None)
+        cache.delete(f"oauth_state:{state}")
     
     @classmethod
     def cleanup_expired(cls):
@@ -388,6 +383,7 @@ def create_or_update_oauth_user(
             user = User.objects.create_user(
                 username=username,
                 email=email,
+                password=None,
                 first_name=given_name,
                 last_name=family_name,
             )
@@ -397,6 +393,29 @@ def create_or_update_oauth_user(
             user.save()
             
             logger.info(f"Created new OAuth user: {user.username} ({provider})")
+        
+            # Ensure user has at least one organization
+            if not OrganizationMembership.objects.filter(user=user).exists():
+                # Create personal organization
+                personal_org = Organization.objects.create(
+                    name=f"{user.first_name or user.username}'s Workspace",
+                    slug=f"{user.username}-workspace",
+                )
+                
+                # Get or create owner role
+                owner_role, _ = Role.objects.get_or_create(
+                    name='owner',
+                    defaults={'description': 'Organization owner'}
+                )
+                
+                # Make user owner of their organization
+                OrganizationMembership.objects.create(
+                    user=user,
+                    organization=personal_org,
+                    role=owner_role
+                )
+                
+                logger.info(f"Created personal organization for {user.username}")
         
         # Check if this is the first social account for this provider
         is_primary = not SocialAccount.objects.filter(
