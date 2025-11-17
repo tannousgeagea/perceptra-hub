@@ -162,6 +162,7 @@ async def oauth_callback(
         provider = callback_data.provider
     
     # Verify state to prevent CSRF
+    logger.warning(f"State: {state}")
     if not OAuthStateManager.verify_state(state):
         logger.warning(f"Invalid OAuth state received: {state}")
         raise HTTPException(
@@ -178,7 +179,6 @@ async def oauth_callback(
         if provider == 'microsoft':
             # Exchange code for token
             token_response = await MicrosoftOAuth.exchange_code_for_token(code)
-            
             if not token_response:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
