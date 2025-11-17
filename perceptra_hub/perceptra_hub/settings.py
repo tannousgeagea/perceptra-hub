@@ -145,6 +145,16 @@ MICROSOFT_AUTHORIZATION_URL = f"{MICROSOFT_AUTHORITY_URL}/oauth2/v2.0/authorize"
 MICROSOFT_TOKEN_URL = f"{MICROSOFT_AUTHORITY_URL}/oauth2/v2.0/token"
 MICROSOFT_GRAPH_URL = "https://graph.microsoft.com/v1.0/me"
 
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID = env('GOOGLE_CLIENT_ID', default='')
+GOOGLE_CLIENT_SECRET = env('GOOGLE_CLIENT_SECRET', default='')
+GOOGLE_REDIRECT_URI = env('GOOGLE_REDIRECT_URI', default='http://localhost:29085/api/v1/auth/oauth/callback')
+
+# OAuth URLs
+GOOGLE_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
+
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_HOST = "smtp.office365.com"
 EMAIL_PORT = 587  # Or 465 for SSL
