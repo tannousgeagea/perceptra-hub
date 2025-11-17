@@ -15,11 +15,13 @@ from api.routers.auth.schemas import (
 )
 from common_utils.auth.oauth import (
     MicrosoftOAuth,
+    GoogleOAuth,
     OAuthStateManager,
     create_or_update_oauth_user,
 )
 from common_utils.auth.utils import create_tokens_for_user
 from organizations.models import Organization
+from authentication.models import SocialAccount
 from memberships.models import OrganizationMembership
 
 logger = logging.getLogger(__name__)
@@ -60,11 +62,12 @@ async def initiate_oauth(request: OAuthInitiateRequest):
     # Get authorization URL
     if provider == 'microsoft':
         auth_url = MicrosoftOAuth.get_authorization_url(state)
+    elif provider == 'google':
+        auth_url = GoogleOAuth.get_authorization_url(state)
     else:
-        # Google will be implemented next
         raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Google OAuth not yet implemented"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported provider: {provider}"
         )
     
     logger.info(f"OAuth initiated for provider: {provider}")
@@ -205,11 +208,33 @@ async def oauth_callback(
             logger.info(f"Microsoft user info: {user_data_dict['display_name']} ({user_data_dict['email']})")
                         
         elif provider == 'google':
-            # Google implementation will come next
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Google OAuth not yet implemented"
-            )
+            # Exchange code for token
+            token_response = await GoogleOAuth.exchange_code_for_token(code)
+            
+            if not token_response:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Failed to exchange authorization code for token"
+                )
+            
+            access_token = token_response.get('access_token')
+            refresh_token = token_response.get('refresh_token')
+            expires_in = token_response.get('expires_in')
+            
+            # Get user info from Google UserInfo API
+            user_info = await GoogleOAuth.get_user_info(access_token)
+            
+            if not user_info:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Failed to fetch user information from Google"
+                )
+            
+            # Extract and normalize user data
+            user_data_dict = GoogleOAuth.extract_user_data(token_response, user_info)
+            
+            # Log what we received
+            logger.info(f"Google user info: {user_data_dict['display_name']} ({user_data_dict['email']})")
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -268,21 +293,85 @@ async def oauth_callback(
 
 # ============= OAuth Account Management =============
 
+@sync_to_async
+def get_user_social_accounts(user):
+    """Get all active social accounts for user."""
+    accounts = SocialAccount.objects.filter(
+        user=user,
+        is_revoked=False
+    ).order_by('-is_primary', '-last_login')
+    
+    return [
+        {
+            "provider": account.provider,
+            "email": account.email,
+            "email_verified": account.email_verified,
+            "display_name": account.display_name,
+            "is_primary": account.is_primary,
+            "linked_at": account.created_at.isoformat(),
+            "last_used": account.last_login.isoformat(),
+        }
+        for account in accounts
+    ]
+
 @router.get(
     "/linked-accounts",
     summary="Get Linked OAuth Accounts",
     description="Get all OAuth accounts linked to current user"
 )
-async def get_linked_accounts():
+async def get_linked_accounts(user = None):  # TODO: Add Depends(get_current_user) when ready
     """
     Get user's linked OAuth accounts.
     
-    TODO: Implement after adding authentication dependency
+    TODO: Add authentication dependency
     """
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="This endpoint will be implemented after basic OAuth flow is working"
-    )
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Authentication required - will be implemented after basic OAuth flow is working"
+        )
+    
+    accounts = await get_user_social_accounts(user)
+    
+    return {
+        "accounts": accounts,
+        "count": len(accounts)
+    }
+
+
+@sync_to_async
+def revoke_social_account(user, provider: str):
+    """Revoke/unlink a social account."""
+    try:
+        account = SocialAccount.objects.get(
+            user=user,
+            provider=provider,
+            is_revoked=False
+        )
+        
+        # Don't allow unlinking if it's the only way to sign in
+        has_password = user.has_usable_password()
+        other_accounts = SocialAccount.objects.filter(
+            user=user,
+            is_revoked=False
+        ).exclude(id=account.uuid).exists()
+        
+        if not has_password and not other_accounts:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot unlink the only authentication method. Please set a password first."
+            )
+        
+        account.revoke(save=True)
+        logger.info(f"User {user.username} unlinked {provider} account")
+        
+        return True
+        
+    except SocialAccount.DoesNotExist:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No active {provider} account found"
+        )
 
 
 @router.delete(
@@ -291,19 +380,45 @@ async def get_linked_accounts():
     summary="Unlink OAuth Account",
     description="Remove OAuth provider link from user account"
 )
-async def unlink_oauth_account(provider: str):
+async def unlink_oauth_account(provider: str, user = None):  # TODO: Add Depends(get_current_user)
     """
     Unlink OAuth account from user.
     
-    TODO: Implement after adding authentication dependency
+    TODO: Add authentication dependency
     """
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="This endpoint will be implemented after basic OAuth flow is working"
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Authentication required - will be implemented after basic OAuth flow is working"
+        )
+    
+    await revoke_social_account(user, provider.lower())
+    
+    return MessageResponse(
+        message=f"{provider.title()} account unlinked successfully"
     )
 
 
 # ============= Development/Testing Endpoints =============
+
+@router.get(
+    "/debug/callback",
+    summary="Debug OAuth Callback (Dev Only)",
+    description="View all parameters received in callback"
+)
+async def debug_callback(request: Request):
+    """Debug endpoint to see what parameters Microsoft is sending."""
+    return {
+        "method": request.method,
+        "url": str(request.url),
+        "query_params": dict(request.query_params),
+        "headers": {
+            "referer": request.headers.get("referer"),
+            "user-agent": request.headers.get("user-agent"),
+        },
+        "message": "This is what the callback received"
+    }
+
 
 @router.get(
     "/test-state",
@@ -315,8 +430,12 @@ async def test_state_generation():
     state = OAuthStateManager.generate_state({"test": "data"})
     is_valid = OAuthStateManager.verify_state(state)
     
+    # Generate a test authorization URL
+    test_url = MicrosoftOAuth.get_authorization_url(state)
+    
     return {
         "state": state,
         "is_valid": is_valid,
-        "message": "State generated successfully"
+        "test_authorization_url": test_url,
+        "message": "State generated successfully. Check if 'state' appears in the test URL."
     }

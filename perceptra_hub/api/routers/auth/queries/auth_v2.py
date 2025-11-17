@@ -28,9 +28,9 @@ from common_utils.auth.utils import (
     verify_password_reset_token,
     generate_password_reset_token,
 )
-from api.dependencies import get_current_user, get_optional_user, fetch_user_from_db
+from api.dependencies import get_current_user
 from organizations.models import Organization
-from memberships.models import OrganizationMembership
+from memberships.models import OrganizationMembership, Role
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -66,6 +66,30 @@ def register_new_user(user_data: UserRegister):
         first_name=user_data.first_name,
         last_name=user_data.last_name,
     )
+    
+    # Ensure user has at least one organization
+    if not OrganizationMembership.objects.filter(user=user).exists():
+        # Create personal organization
+        personal_org = Organization.objects.create(
+            name=f"{user.first_name or user.username}'s Workspace",
+            slug=f"{user.username}-workspace",
+            owner=user,
+        )
+        
+        # Get or create owner role
+        owner_role, _ = Role.objects.get_or_create(
+            name='owner',
+            defaults={'description': 'Organization owner'}
+        )
+        
+        # Make user owner of their organization
+        OrganizationMembership.objects.create(
+            user=user,
+            organization=personal_org,
+            role=owner_role
+        )
+        
+        logger.info(f"Created personal organization for {user.username}")
     
     # Create tokens
     tokens = create_tokens_for_user(user)

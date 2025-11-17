@@ -16,6 +16,155 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
+# ============= Google OAuth =============
+
+class GoogleOAuth:
+    """Google OAuth 2.0 handler."""
+    
+    SCOPES = [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile"
+    ]
+    
+    @staticmethod
+    def get_authorization_url(state: str) -> str:
+        """
+        Generate Google OAuth authorization URL.
+        
+        Args:
+            state: Random state string for CSRF protection
+            
+        Returns:
+            Authorization URL to redirect user to
+        """
+        from urllib.parse import urlencode
+        
+        params = {
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "response_type": "code",
+            "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+            "scope": " ".join(GoogleOAuth.SCOPES),
+            "state": state,
+            "access_type": "offline",  # Get refresh token
+            "prompt": "select_account",  # Let user choose account
+        }
+        
+        query_string = urlencode(params)
+        auth_url = f"{settings.GOOGLE_AUTHORIZATION_URL}?{query_string}"
+        
+        logger.info(f"Generated Google auth URL with state: {state[:20]}...")
+        return auth_url
+    
+    @staticmethod
+    async def exchange_code_for_token(code: str) -> Optional[Dict[str, Any]]:
+        """
+        Exchange authorization code for access token.
+        
+        Args:
+            code: Authorization code from Google
+            
+        Returns:
+            Token response dict or None if failed
+        """
+        token_data = {
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        }
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    settings.GOOGLE_TOKEN_URL,
+                    data=token_data,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                )
+                
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    logger.error(f"Google token exchange failed: {response.status_code} - {response.text}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Error exchanging code for token: {e}")
+            return None
+    
+    @staticmethod
+    async def get_user_info(access_token: str) -> Optional[Dict[str, Any]]:
+        """
+        Get user information from Google UserInfo API.
+        
+        Args:
+            access_token: Google access token
+            
+        Returns:
+            User info dict or None if failed
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    settings.GOOGLE_USERINFO_URL,
+                    headers={"Authorization": f"Bearer {access_token}"}
+                )
+                
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    logger.error(f"Failed to get Google user info: {response.status_code} - {response.text}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Error getting user info: {e}")
+            return None
+    
+    @staticmethod
+    def extract_user_data(token_response: Dict[str, Any], user_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract and normalize user data from Google OAuth response.
+        
+        Args:
+            token_response: Token response from Google
+            user_info: User info from Google UserInfo API
+            
+        Returns:
+            Normalized user data dict
+        """
+        # Decode ID token to get OIDC claims (if available)
+        id_token = token_response.get('id_token')
+        id_token_claims = {}
+        
+        if id_token:
+            try:
+                import jwt
+                # Decode without verification (we already trust the token from Google)
+                id_token_claims = jwt.decode(id_token, options={"verify_signature": False})
+            except Exception as e:
+                logger.warning(f"Could not decode Google ID token: {e}")
+        
+        # Extract data with fallbacks
+        return {
+            "provider_user_id": user_info.get('id', ''),
+            "subject": id_token_claims.get('sub') or user_info.get('id', ''),
+            "email": user_info.get('email', ''),
+            "email_verified": user_info.get('verified_email', False) or id_token_claims.get('email_verified', False),
+            "given_name": user_info.get('given_name', ''),
+            "family_name": user_info.get('family_name', ''),
+            "display_name": user_info.get('name', ''),
+            "avatar_url": user_info.get('picture', ''),
+            "issuer": id_token_claims.get('iss', 'https://accounts.google.com'),
+            "tenant_id": "",  # Google doesn't have tenant concept
+            "extra_data": {
+                "locale": user_info.get('locale', ''),
+                "hd": user_info.get('hd', ''),  # Hosted domain (for Google Workspace)
+                "id_token_claims": id_token_claims,
+                "raw_user_info": user_info,
+            }
+        }
+
 # ============= Microsoft OAuth =============
 
 class MicrosoftOAuth:
@@ -400,6 +549,7 @@ def create_or_update_oauth_user(
                 personal_org = Organization.objects.create(
                     name=f"{user.first_name or user.username}'s Workspace",
                     slug=f"{user.username}-workspace",
+                    owner=user,
                 )
                 
                 # Get or create owner role
