@@ -5,7 +5,9 @@ from django.utils import timezone
 
 from projects.models import Version
 from storage.services import get_storage_adapter_for_profile
-from .yolo_export import YOLOStreamingExporter
+from .export_yolo import YOLOStreamingExporter
+from .export_coco import COCOStreamingExporter
+from .export_voc import VOCStreamingExporter
 from .base import ExportConfig
 
 logger = logging.getLogger(__name__)
@@ -17,7 +19,8 @@ class StreamingDatasetExportManager:
     
     EXPORTERS = {
         'yolo': YOLOStreamingExporter,
-        # Add more: 'coco': COCOStreamingExporter, etc.
+        'coco': COCOStreamingExporter,
+        'pascal_voc': VOCStreamingExporter,
     }
     
     @staticmethod
@@ -96,6 +99,7 @@ class StreamingDatasetExportManager:
             logger.info(
                 f"Export completed successfully. "
                 f"Version: {version.version_name}, "
+                f"Format: {version.export_format}, "
                 f"Images: {version.total_images}, "
                 f"Size: {version.file_size / (1024*1024):.2f}MB"
             )

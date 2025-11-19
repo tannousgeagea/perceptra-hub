@@ -1,13 +1,13 @@
+from uuid import UUID
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 
-
-class AssigneeOut(BaseModel):
-    id: str
+class AssignedUserOut(BaseModel):
+    id: int
     username: str
     email: str
-
+    avatar: Optional[str] = None
 
 class JobResponse(BaseModel):
     id: str
@@ -15,10 +15,22 @@ class JobResponse(BaseModel):
     description: Optional[str]
     status: str
     image_count: int
-    assignee: Optional[AssigneeOut]
+    assignee: Optional[AssignedUserOut]
     batch_id: Optional[str]
     created_at: datetime
     updated_at: datetime
+
+class JobOut(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    status: str
+    imageCount: int
+    assignedUser: Optional[AssignedUserOut] = None
+    created_at: str
+    updated_at: str
+    project_id: UUID
+    project_name: str
     
 class JobUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
