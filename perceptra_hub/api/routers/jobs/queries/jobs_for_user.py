@@ -1,4 +1,5 @@
 import time
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Optional
 from pydantic import BaseModel
@@ -13,6 +14,9 @@ from api.dependencies import (
     get_current_user,
     RequestContext,
     get_request_context,
+)
+from api.routers.jobs.schemas import (
+    JobOut
 )
 
 class TimedRoute(APIRoute):
@@ -33,23 +37,6 @@ class TimedRoute(APIRoute):
 router = APIRouter(
     route_class=TimedRoute
 )
-
-class AssignedUserOut(BaseModel):
-    id: int
-    username: str
-    email: str
-    avatar: Optional[str] = None
-
-class JobOut(BaseModel):
-    id: int
-    name: str
-    description: Optional[str] = None
-    status: str
-    imageCount: int
-    assignedUser: Optional[AssignedUserOut] = None
-    createdAt: str
-    updatedAt: str
-    projectId: str
 
 @router.get("/jobs/me", response_model=List[JobOut])
 def get_jobs_for_user(
@@ -77,9 +64,10 @@ def get_jobs_for_user(
                 email=job.assignee.email,
                 avatar=getattr(job.assignee, "avatar", None),
             ) if job.assignee else None,
-            createdAt=job.created_at.isoformat(),
-            updatedAt=job.updated_at.isoformat(),
-            projectId=job.project.name,
+            created_at=job.created_at.isoformat(),
+            updated_at=job.updated_at.isoformat(),
+            project_id=job.project.project_id,
+            project_name=job.project.name,
         )
         for job in jobs
     ]
