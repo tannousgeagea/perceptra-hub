@@ -7,6 +7,7 @@ from projects.models import ProjectImage
 from annotations.models import Annotation
 from .models import ActivityEvent, ActivityEventType
 from api.tasks.activity import update_user_metrics_async
+from api.tasks.billing.billable_action import create_billable_action_from_event
 import time
 
 
@@ -253,3 +254,14 @@ def track_image_project_removal(sender, instance, created, update_fields, **kwar
                     'status': instance.status,
                 }
             )
+
+
+@receiver(post_save, sender=ActivityEvent)
+def create_billing_record(sender, instance, created, **kwargs):
+    """Trigger billable action creation for vendor billing."""
+    if created:
+        # Only create billing for vendor organizations
+        if instance.organization.is_vendor:  # Add this flag to Organization model
+            transaction.on_commit(lambda: create_billable_action_from_event.delay(
+                str(instance.event_id)
+            ))
