@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # INCREMENTAL UPDATES (Real-time)
 # ============================================================================
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, name="activity:update_user_metrics_async", queue="activity")
 def update_user_metrics_async(self, user_id, organization_id, event_type, project_id=None,  batch_count=1):
     """
     Incrementally update user metrics after each event.
@@ -449,8 +449,8 @@ def compute_all_project_metrics(start_date=None, end_date=None):
     return f"Queued {count} projects"
 
 
-@shared_task
-def compute_project_metrics(project_id, start_date=None):
+@shared_task(bind=True, queue="activity", name="activity:compute_project_metrics")
+def compute_project_metrics(self, project_id, start_date=None):
     """
     Compute project-level metrics including untouched predictions.
     """

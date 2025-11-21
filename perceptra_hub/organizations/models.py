@@ -208,6 +208,12 @@ class Organization(models.Model):
         related_name='organizations_updated'
     )
 
+    is_vendor = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=_('Whether this is an annotation vendor organization')
+    )
+
     class Meta:
         db_table = "organization"
         verbose_name = "Organization"

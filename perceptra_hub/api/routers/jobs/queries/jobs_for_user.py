@@ -16,7 +16,7 @@ from api.dependencies import (
     get_request_context,
 )
 from api.routers.jobs.schemas import (
-    JobOut
+    JobOut, AssignedUserOut
 )
 
 class TimedRoute(APIRoute):
