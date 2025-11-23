@@ -1,3 +1,5 @@
+
+import uuid
 from django.db import models
 from projects.models import (
     Project,
@@ -275,3 +277,61 @@ class AnnotationAudit(models.Model):
 
     def __str__(self):
         return f"{self.annotation.id} - {self.evaluation_status or 'Unreviewed'}"
+
+
+
+#############################################################
+# AI Suggesstions
+#############################################################
+class SuggestionSession(models.Model):
+    """Tracks a batch of AI suggestions for audit/analytics."""
+    
+    class SourceType(models.TextChoices):
+        SAM_AUTO = 'sam_auto', 'SAM Auto-Segment'
+        SAM_POINT = 'sam_point', 'SAM Point Prompt'
+        SIMILAR_OBJECT = 'similar', 'Similar Object'
+        PREVIOUS_FRAME = 'prev_frame', 'Previous Frame'
+        LABEL_SUGGEST = 'label', 'Label Suggestion'
+    
+    suggestion_id = models.UUIDField(default=uuid.uuid4)
+    project_image = models.ForeignKey(
+        ProjectImage, on_delete=models.CASCADE, related_name='suggestion_sessions'
+    )
+    source_type = models.CharField(max_length=20, choices=SourceType.choices)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    # Metrics
+    suggestions_generated = models.IntegerField(default=0)
+    suggestions_accepted = models.IntegerField(default=0)
+    suggestions_rejected = models.IntegerField(default=0)
+    
+    # Reference data
+    source_annotation_uid = models.CharField(max_length=100, null=True, blank=True)
+    source_image_id = models.IntegerField(null=True, blank=True)  # for prev_frame
+    model_version = models.CharField(max_length=50, null=True, blank=True)
+    meta_info = models.JSONField(null=True, blank=True, default=dict)
+    
+    # Model configuration (stored once per session)
+    model_name = models.CharField(
+        max_length=20,
+        default='sam_v2',
+        help_text='SAM model version (sam_v1, sam_v2, sam_v3)'
+    )
+    model_device = models.CharField(
+        max_length=10,
+        default='cuda',
+        help_text='Device (cuda or cpu)'
+    )
+    model_precision = models.CharField(
+        max_length=10,
+        default='fp16',
+        help_text='Precision (fp16 or fp32)'
+    )
+    
+    class Meta:
+        db_table = 'suggestion_session'
+        indexes = [
+            models.Index(fields=['project_image', 'created_at']),
+            models.Index(fields=['source_type', 'created_at']),
+        ]
