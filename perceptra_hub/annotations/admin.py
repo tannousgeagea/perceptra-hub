@@ -6,6 +6,7 @@ from .models import (
     AnnotationType,
     Annotation,
     AnnotationAudit,
+    SuggestionSession,
 )
 
 class AnnotationClassInline(TabularInline):
@@ -51,3 +52,7 @@ class AnnotationAuditAdmin(ModelAdmin):
     list_display = ("id", "annotation", "evaluation_status", "was_edited", "reviewed_at")
     list_filter = ("was_edited", "evaluation_status")
     search_fields = ("id", "annotation_id")
+    
+@admin.register(SuggestionSession)
+class SuggestionSessionAdmin(ModelAdmin):
+    list_display = ("id", "suggestion_id", "project_image", "source_type")
