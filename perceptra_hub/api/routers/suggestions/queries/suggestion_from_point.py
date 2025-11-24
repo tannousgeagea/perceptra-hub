@@ -9,11 +9,9 @@ from api.dependencies import get_project_context, ProjectContext
 from api.routers.suggestions.schemas import *
 from api.routers.suggestions.services import SuggestionService
 from api.routers.suggestions.segmentation_service import SegmentationService
+from api.routers.suggestions.dependencies import get_segmentation_service
 
 router = APIRouter(prefix="/projects")
-
-def get_segmentation_service() -> SegmentationService:
-    return SegmentationService.get_instance()
 
 # Dependency
 def get_suggestion_service() -> SuggestionService:

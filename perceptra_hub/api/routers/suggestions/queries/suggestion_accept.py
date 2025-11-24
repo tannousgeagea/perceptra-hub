@@ -12,9 +12,6 @@ from api.routers.suggestions.segmentation_service import SegmentationService
 
 router = APIRouter(prefix="/projects")
 
-def get_segmentation_service() -> SegmentationService:
-    return SegmentationService.get_instance()
-
 # Dependency
 def get_suggestion_service() -> SuggestionService:
     return SuggestionService()
