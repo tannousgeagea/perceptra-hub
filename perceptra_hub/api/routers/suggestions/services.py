@@ -105,6 +105,11 @@ class SuggestionService:
             'image__storage_profile'
         ).get(id=image_id)
         
+        
+        if project_image.image.storage_profile.backend == "local":
+            pil_img = PILImage.open(f"{project_image.image.storage_profile.config['base_path']}/{project_image.image.storage_key}")
+            return np.array(pil_img)
+        
         # Get presigned URL from storage
         presigned_url = project_image.image.get_download_url(expiration=300)
         
