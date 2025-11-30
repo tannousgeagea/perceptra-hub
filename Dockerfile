@@ -85,6 +85,7 @@ RUN pip3 install perceptra-storage[all]==0.1.2
 RUN pip3 install pyjwt
 RUN pip3 install httpx>=0.24.0  # For async HTTP requests
 RUN pip3 install authlib>=1.2.0  # OAuth library (optional but recommended)
+RUN pip3 install perceptra-seg
 
 # upgrade everything
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -q -y \
