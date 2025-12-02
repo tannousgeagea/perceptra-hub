@@ -31,7 +31,7 @@ class ModelAdmin(ModelAdmin):
     
 @admin.register(ModelVersion)
 class ModelVersionAdmin(ModelAdmin):
-    list_display = ("id", "model", "version")
+    list_display = ("id", "model", "version_number")
     list_filter = ("model", )
     
     
