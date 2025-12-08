@@ -100,7 +100,10 @@ class TrainingTriggerRequest(BaseModel):
         description="Training configuration (hyperparameters, etc.)"
     )
     version_name: Optional[str] = Field(None, max_length=255)
-
+    compute_profile_id: Optional[str] = Field(
+        None,
+        description="Compute profile to use (uses default if not specified)"
+    )
 
 class TrainingTriggerResponse(BaseModel):
     """Response after triggering training"""
