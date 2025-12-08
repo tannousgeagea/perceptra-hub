@@ -114,7 +114,7 @@ def get_user_projects(user: User, organization):
     
     return result
 
-@router.get("/projects/me", response_model=List[ProjectListItem])
+@router.get("/projects/user/me", response_model=List[ProjectListItem])
 async def get_my_projects(
     ctx: RequestContext = Depends(get_request_context)
 ):
