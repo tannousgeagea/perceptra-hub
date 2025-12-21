@@ -1,5 +1,6 @@
 
 from ml_models.models import Model, ModelVersion, ModelTag, ModelFramework, ModelTask
+from asgiref.sync import sync_to_async
 
 def serialize_model_version(version: ModelVersion) -> dict:
     """Serialize a model version to dict"""
@@ -49,6 +50,7 @@ def serialize_model_version(version: ModelVersion) -> dict:
     }
 
 
+@sync_to_async
 def serialize_model_detail(model: Model) -> dict:
     """Serialize full model details"""
     versions = [
@@ -75,3 +77,24 @@ def serialize_model_detail(model: Model) -> dict:
         "created_at": model.created_at,
         "updated_at": model.updated_at
     }
+
+@sync_to_async
+def serialize_models(models):
+    result = []
+    for model in models:
+        latest_version = model.get_latest_version()
+        result.append({
+            "id": model.model_id,
+            "name": model.name,
+            "description": model.description,
+            "task": model.task.name,
+            "framework": model.framework.name,
+            "tags": [tag.name for tag in model.tags.all()],
+            "version_count": model.versions.filter(is_deleted=False).count(),
+            "latest_version_number": latest_version.version_number if latest_version else None,
+            "latest_status": latest_version.status if latest_version else None,
+            "created_at": model.created_at,
+            "updated_at": model.updated_at
+        })
+
+    return result

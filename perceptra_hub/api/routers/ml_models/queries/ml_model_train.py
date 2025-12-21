@@ -63,7 +63,6 @@ async def trigger_training(
     
     Requires: Organization member with edit permissions
     """
-    from event_api.tasks.train_model.core import train_model
     import uuid
     
     # Get model
@@ -147,21 +146,22 @@ async def trigger_training(
         triggered_by=ctx.user
     )
     
-    # Trigger async training task
-    task = train_model.apply_async(
-        args=(model_version.version_id, parent_version.version_id if parent_version else None),
-        task_id=session_id
-    )
+    # Submit training via orchestrator
+    from training.orchestrator import TrainingOrchestrator
     
-    # Update training session with task ID
-    training_session.task_id = task.id
-    await sync_to_async(training_session.save)()
+    orchestrator = TrainingOrchestrator(model_version)
+    training_job = await sync_to_async(orchestrator.submit_training)(
+        training_session,
+        compute_profile_id=data.compute_profile_id
+    )
     
     return {
         "model_version_id": model_version.version_id,
         "version_number": version_number,
         "training_session_id": session_id,
-        "task_id": task.id,
+        "task_id": training_job.external_job_id or training_job.job_id,
         "status": "queued",
-        "message": f"Training queued for {model.name} v{version_number}"
+        "compute_provider": training_job.actual_provider.name,
+        "instance_type": training_job.instance_type,
+        "message": f"Training queued for {model.name} v{version_number} on {training_job.actual_provider.name}"
     }
