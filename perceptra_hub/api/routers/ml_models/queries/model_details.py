@@ -61,4 +61,4 @@ async def get_model(
     Requires: Organization member
     """
     model = await get_model_by_id(model_id, ctx.organization)
-    return serialize_model_detail(model)
+    return await serialize_model_detail(model)

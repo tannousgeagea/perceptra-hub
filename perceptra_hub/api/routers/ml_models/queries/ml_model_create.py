@@ -118,4 +118,4 @@ async def create_model(
     )
     
     # Serialize and return
-    return serialize_model_detail(model)
+    return await serialize_model_detail(model)

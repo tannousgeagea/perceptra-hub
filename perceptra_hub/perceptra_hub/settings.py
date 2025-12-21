@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     'activity',
     'authentication',
     'billing',
+    'compute',
 ]
 
 MIDDLEWARE = [

@@ -17,7 +17,7 @@ from api.dependencies import (
     ProjectContext
 )
 
-from api.routers.ml_models.utils import serialize_model_detail
+from api.routers.ml_models.utils import serialize_model_detail, serialize_models
 from api.routers.ml_models.schemas import ModelListResponse
 from asgiref.sync import sync_to_async
 
@@ -39,6 +39,11 @@ def list_models_for_project(project: Project):
         ).order_by('-created_at')
     )
     
+    
+@sync_to_async
+def get_model_latest_version(model:Model):
+    return model.get_latest_version()
+    
 @router.get(
     "/projects/{project_id}/models",
     response_model=List[ModelListResponse]
@@ -56,21 +61,5 @@ async def list_project_models(
     
     models = await list_models_for_project(project_ctx.project)
     
-    result = []
-    for model in models:
-        latest_version = model.get_latest_version()
-        result.append({
-            "id": model.model_id,
-            "name": model.name,
-            "description": model.description,
-            "task": model.task.name,
-            "framework": model.framework.name,
-            "tags": [tag.name for tag in model.tags.all()],
-            "version_count": model.versions.filter(is_deleted=False).count(),
-            "latest_version_number": latest_version.version_number if latest_version else None,
-            "latest_status": latest_version.status if latest_version else None,
-            "created_at": model.created_at,
-            "updated_at": model.updated_at
-        })
     
-    return result
+    return await serialize_models(models)
