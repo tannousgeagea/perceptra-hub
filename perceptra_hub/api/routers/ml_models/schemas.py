@@ -1,5 +1,5 @@
 
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, Field
@@ -15,7 +15,17 @@ class ModelCreateRequest(BaseModel):
     task: str = Field(..., description="Task type (object-detection, classification, etc.)")
     framework: str = Field(..., description="Framework (yolo, pytorch, tensorflow, etc.)")
     tags: List[str] = Field(default_factory=list)
+    config: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Training configuration (batchSize, learningRate, epochs, optimizer, scheduler)"
+    )
 
+class ModelUpdateRequest(BaseModel):
+    """Request schema for updating a model"""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = Field(None, max_length=2000)
+    tags: Optional[List[str]] = None
+    config: Optional[Dict[str, Any]] = None
 
 class ModelArtifactResponse(BaseModel):
     """Artifact URLs for a model version"""

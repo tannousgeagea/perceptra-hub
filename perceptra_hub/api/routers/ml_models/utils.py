@@ -1,6 +1,7 @@
 
 from ml_models.models import Model, ModelVersion, ModelTag, ModelFramework, ModelTask
 from asgiref.sync import sync_to_async
+from fastapi import HTTPException, status
 
 def serialize_model_version(version: ModelVersion) -> dict:
     """Serialize a model version to dict"""
@@ -98,3 +99,26 @@ def serialize_models(models):
         })
 
     return result
+
+
+@sync_to_async
+def get_model_by_id(model_id: str, organization) -> Model:
+    """Fetch model by ID with organization check"""
+    try:
+        return Model.objects.select_related(
+            'task', 'framework', 'project', 'created_by'
+        ).prefetch_related(
+            'tags',
+            'versions__dataset_version__project',
+            'versions__created_by',
+            'versions__deployed_by'
+        ).get(
+            model_id=model_id,
+            organization=organization,
+            is_deleted=False
+        )
+    except Model.DoesNotExist:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model {model_id} not found"
+        )

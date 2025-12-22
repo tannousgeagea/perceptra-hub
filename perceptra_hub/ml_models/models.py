@@ -114,6 +114,13 @@ class Model(models.Model):
         related_name='models'
     )
     
+    # Default training configuration
+    default_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=_('Default training config (batchSize, learningRate, epochs, optimizer, scheduler)')
+    )
+    
     # Audit fields
     created_by = models.ForeignKey(
         User,
