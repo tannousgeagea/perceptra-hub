@@ -264,6 +264,13 @@ class ModelVersion(models.Model):
         help_text=_('Training metrics (loss, accuracy, mAP, etc.)')
     )
     
+    tags = models.ManyToManyField(
+        ModelTag,
+        blank=True,
+        related_name="model_versions",
+        help_text=_("Tags specific to this model version")
+    )
+    
     # Status tracking
     status = models.CharField(
         max_length=20,
