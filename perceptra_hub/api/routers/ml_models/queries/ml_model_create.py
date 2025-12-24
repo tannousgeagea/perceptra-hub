@@ -61,6 +61,20 @@ def create_model_in_db(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Model '{data.name}' already exists in this organization"
         )
+        
+    # Normalize config keys (camelCase to snake_case)
+    normalized_config = {}
+    if data.config:
+        key_mapping = {
+            'batchSize': 'batch_size',
+            'learningRate': 'learning_rate',
+            'epochs': 'epochs',
+            'optimizer': 'optimizer',
+            'scheduler': 'scheduler'
+        }
+        for key, value in data.config.items():
+            normalized_key = key_mapping.get(key, key)
+            normalized_config[normalized_key] = value
     
     # Create model
     model = Model.objects.create(
@@ -71,6 +85,7 @@ def create_model_in_db(
         project=project,
         task=task,
         framework=framework,
+        default_config=normalized_config,
         created_by=ctx.user
     )
     
