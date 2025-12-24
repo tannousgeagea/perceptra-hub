@@ -2,6 +2,7 @@
 """
 Improved ML Model API with proper authentication and multi-tenancy.
 """
+import uuid
 from typing import List, Optional
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, status
@@ -26,6 +27,31 @@ from asgiref.sync import sync_to_async
 router = APIRouter(
     prefix="/models",
 )
+
+
+@sync_to_async
+def build_duplicate_payload(original):
+    """
+    Fully resolves all Django ORM fields in a sync context
+    and returns plain Python objects.
+    """
+    return {
+        "model_id": str(uuid.uuid4()),
+        "description": original.description,
+        "organization": original.organization,  # FK resolved here
+        "project": original.project,              # FK resolved here
+        "task": original.task,
+        "framework": original.framework,
+        "default_config": (
+            original.default_config.copy()
+            if original.default_config else {}
+        ),
+    }
+
+@sync_to_async
+def get_original_tags(original):
+    """Fetch M2M relations separately"""
+    return list(original.tags.all())
 
 @router.post(
     "/{model_id}/duplicate",
@@ -76,23 +102,18 @@ async def duplicate_model(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Model '{new_name}' already exists"
             )
+    payload = await build_duplicate_payload(original)
     
     # Create duplicate
     duplicate = await sync_to_async(Model.objects.create)(
-        model_id=str(uuid.uuid4()),
         name=new_name,
-        description=original.description,
-        organization=original.organization,
-        project=original.project,
-        task=original.task,
-        framework=original.framework,
-        default_config=original.default_config.copy() if original.default_config else {},
-        created_by=ctx.user
+        created_by=ctx.user,
+        **payload,
     )
     
-    # Copy tags
-    tags = await sync_to_async(lambda: list(original.tags.all()))()
+    # Set tags (sync ORM)
+    tags = await get_original_tags(original)
     if tags:
         await sync_to_async(duplicate.tags.set)(tags)
     
-    return serialize_model_detail(duplicate)
+    return await serialize_model_detail(duplicate)
