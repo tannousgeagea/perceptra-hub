@@ -14,6 +14,7 @@ class ComputeProvider(models.Model):
     PROVIDER_CHOICES = [
         ('platform-gpu', 'Platform GPU Workers'),  # Your on-premise GPUs
         ('platform-cpu', 'Platform CPU Workers'),  # Fallback CPU
+        ('on-premise-agent', 'On-Premise Agent'),  # User's own GPUs
         ('aws-sagemaker', 'AWS SageMaker'),
         ('gcp-vertex', 'GCP Vertex AI'),
         ('azure-ml', 'Azure ML'),
@@ -247,3 +248,236 @@ class TrainingJob(models.Model):
     
     def __str__(self):
         return f"Job {self.job_id} on {self.actual_provider.name}"
+    
+class Agent(models.Model):
+    """
+    User's on-premise training agent.
+    Represents a GPU machine running the training agent software.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),      # Registered but not connected yet
+        ('ready', 'Ready'),           # Connected and available
+        ('busy', 'Busy'),             # Currently training
+        ('offline', 'Offline'),       # Not connected (timeout)
+        ('error', 'Error'),           # Error state
+    ]
+    
+    agent_id = models.CharField(
+        max_length=255,
+        unique=True,
+        help_text=_('Unique identifier for this agent')
+    )
+    
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='agents',
+        help_text=_('Organization that owns this agent')
+    )
+    
+    name = models.CharField(
+        max_length=255,
+        help_text=_('Human-readable name for this agent')
+    )
+    
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending'
+    )
+    
+    # GPU information
+    gpu_info = models.JSONField(
+        default=list,
+        help_text=_('List of GPUs available on this agent')
+    )
+    
+    # System information
+    system_info = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=_('System specs (CPU, RAM, OS, etc.)')
+    )
+    
+    # Connection details
+    last_heartbeat = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_('Last time agent sent heartbeat')
+    )
+    
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        help_text=_('Agent IP address')
+    )
+    
+    version = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text=_('Agent software version')
+    )
+    
+    # Capabilities
+    max_concurrent_jobs = models.PositiveIntegerField(
+        default=1,
+        help_text=_('Maximum concurrent training jobs')
+    )
+    
+    # Metadata
+    notes = models.TextField(
+        blank=True,
+        help_text=_('Admin notes about this agent')
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_agents'
+    )
+    
+    class Meta:
+        db_table = 'agent'
+        verbose_name_plural = 'Agents'
+        indexes = [
+            models.Index(fields=['organization', 'status']),
+            models.Index(fields=['last_heartbeat']),
+        ]
+        unique_together = [('organization', 'name')]
+    
+    def __str__(self):
+        return f"{self.name} ({self.organization.name})"
+    
+    @property
+    def is_online(self) -> bool:
+        """Check if agent is online (heartbeat within last 2 minutes)"""
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        if not self.last_heartbeat:
+            return False
+        
+        return self.last_heartbeat > timezone.now() - timedelta(minutes=2)
+    
+    @property
+    def gpu_count(self) -> int:
+        """Get number of GPUs"""
+        return len(self.gpu_info) if isinstance(self.gpu_info, list) else 0
+    
+    def update_heartbeat(self):
+        """Update last heartbeat timestamp"""
+        from django.utils import timezone
+        
+        self.last_heartbeat = timezone.now()
+        if self.status == 'offline':
+            self.status = 'ready'
+        self.save(update_fields=['last_heartbeat', 'status', 'updated_at'])
+
+
+class AgentAPIKey(models.Model):
+    """
+    API keys for agent authentication.
+    Each agent needs a key to connect to the platform.
+    """
+    key_id = models.CharField(
+        max_length=255,
+        unique=True,
+        help_text=_('Public key identifier (e.g., org_123_agent_abc)')
+    )
+    
+    key_hash = models.CharField(
+        max_length=255,
+        help_text=_('Hashed secret key')
+    )
+    
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='agent_api_keys'
+    )
+    
+    agent = models.ForeignKey(
+        Agent,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='api_keys',
+        help_text=_('Agent this key is for (null if not yet assigned)')
+    )
+    
+    name = models.CharField(
+        max_length=255,
+        help_text=_('Human-readable name for this key')
+    )
+    
+    is_active = models.BooleanField(default=True)
+    
+    last_used = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_('Last time this key was used')
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_('Optional expiration date')
+    )
+    
+    class Meta:
+        db_table = 'agent_api_key'
+        verbose_name_plural = 'Agent API Keys'
+        indexes = [
+            models.Index(fields=['organization', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} ({self.key_id})"
+    
+    @staticmethod
+    def generate_key() -> tuple[str, str]:
+        """
+        Generate a new API key.
+        Returns (key_id, secret_key)
+        """
+        import secrets
+        import hashlib
+        
+        # Generate secret (32 bytes = 256 bits)
+        secret = secrets.token_urlsafe(32)
+        
+        # Generate key_id
+        key_id = f"agent_{secrets.token_hex(8)}"
+        
+        # Hash secret for storage
+        key_hash = hashlib.sha256(secret.encode()).hexdigest()
+        
+        return key_id, secret, key_hash
+    
+    def verify_secret(self, secret: str) -> bool:
+        """Verify if provided secret matches stored hash"""
+        import hashlib
+        
+        provided_hash = hashlib.sha256(secret.encode()).hexdigest()
+        return provided_hash == self.key_hash
+    
+    @property
+    def is_expired(self) -> bool:
+        """Check if key is expired"""
+        from django.utils import timezone
+        
+        if not self.expires_at:
+            return False
+        return timezone.now() > self.expires_at

@@ -75,7 +75,7 @@ class ModelVersionInline(admin.TabularInline):
     show_change_link = True
 
 @admin.register(Model)
-class ModelAdmin(ModelAdmin):
+class MLModelAdmin(ModelAdmin):
     inlines = [ModelVersionInline]
 
     list_display = (
