@@ -175,7 +175,7 @@ class AgentManager:
             timeout=cls.HEARTBEAT_TIMEOUT
         )
         
-        logger.debug(f"Heartbeat from agent {agent.agent_id}: {status}")
+        logger.info(f"Heartbeat from agent {agent.agent_id}: {status}")
     
     @classmethod
     def assign_job_to_agent(
@@ -282,7 +282,7 @@ class AgentManager:
         queue_key = f"agent:{agent.agent_id}:jobs"
         
         # Pop job from queue (blocking pop with timeout)
-        job_id = cache.rpop(queue_key)
+        job_id = cache.get(queue_key)
         
         if not job_id:
             return None

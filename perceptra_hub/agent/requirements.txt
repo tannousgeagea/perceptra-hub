@@ -1,0 +1,22 @@
+# Core dependencies
+requests==2.31.0
+gputil==1.4.0
+psutil==5.9.8
+pyyaml==6.0.1
+
+# Image processing
+pillow==10.3.0
+opencv-python==4.9.0.80
+
+# Data science
+numpy==1.26.4
+pandas==2.2.2
+
+# Deep learning (installed separately in Dockerfile for CUDA compatibility)
+# torch==2.3.0+cu121
+# torchvision==0.18.0+cu121
+
+# Training frameworks
+ultralytics==8.3.0  # YOLO v8-11
+transformers==4.40.0  # RT-DETR
+timm==0.9.16  # Vision models

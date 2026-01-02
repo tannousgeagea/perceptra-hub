@@ -2,6 +2,7 @@
 Agent Management API Endpoints
 File: api/routers/agents.py
 """
+from os import getenv as env
 from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -16,7 +17,7 @@ from api.routers.agent.schemas import *
 from api.routers.agent.utils import *
 
 router = APIRouter(prefix="/agents",)
-
+BASE_URL = env('BASE_URL', 'http://localhost:8000')
 # ============= User-Facing Endpoints (Require Auth) =============
 
 @router.post("/register", response_model=RegisterAgentResponse)
@@ -35,7 +36,7 @@ async def register_agent(
     @sync_to_async
     def register():
         return AgentManager.register_agent(
-            organization_id=ctx.organization.org_id,
+            organization_id=ctx.organization.id,
             name=request.name,
             gpu_info=gpu_info,
             system_info=system_info,
@@ -53,7 +54,7 @@ async def register_agent(
     
     # Generate install command
     install_command = _generate_install_command(
-        api_url=ctx.request.base_url,
+        api_url=BASE_URL,
         key_id=api_key.key_id,
         secret_key=secret_key,
         agent_id=agent.agent_id
@@ -255,7 +256,7 @@ async def regenerate_api_key(
     
     # Generate new install command
     install_command = _generate_install_command(
-        api_url=ctx.request.base_url,
+        api_url=BASE_URL,
         key_id=api_key.key_id,
         secret_key=secret_key,
         agent_id=agent.agent_id
@@ -297,7 +298,7 @@ async def agent_heartbeat(
     return {"status": "ok", "message": "Heartbeat received"}
 
 
-@router.get("/poll", response_model=PollJobResponse)
+@router.get("/poll/job", response_model=PollJobResponse)
 async def poll_for_job(
     agent: Agent = Depends(authenticate_agent_from_header)
 ):
@@ -306,9 +307,12 @@ async def poll_for_job(
     Returns job details or null if no jobs available.
     """
     
+    import logging
+    logging.error(f"Polling Agent")
     @sync_to_async
     def poll():
         return AgentManager.poll_job(agent)
+    
     
     job_assignment = await poll()
     
@@ -371,18 +375,16 @@ def _generate_install_command(
     agent_id: str
 ) -> str:
     """Generate one-liner install command for agent"""
-    
+    from scripts.generate_agent_install import generate_install_command
     # Clean API URL
     api_url = api_url.rstrip('/')
     
-    command = f"""docker run -d \\
-  --name cv-training-agent \\
-  --gpus all \\
-  --restart unless-stopped \\
-  -e API_URL="{api_url}" \\
-  -e AGENT_KEY="{key_id}" \\
-  -e AGENT_SECRET="{secret_key}" \\
-  -e AGENT_ID="{agent_id}" \\
-  your-registry.io/cv-training-agent:latest"""
+    commands = generate_install_command(
+        api_url=api_url,
+        agent_key=key_id,
+        agent_secret=secret_key,
+        agent_id=agent_id
+    )
     
-    return command
+    # Return docker run as primary command
+    return commands['docker_run']

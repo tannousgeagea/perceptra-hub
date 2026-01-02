@@ -180,7 +180,7 @@ async def get_organization_users_activity(
     project_id: Optional[UUID] = Query(None, description="Filter by project"),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
-    sort_by: str = Query('total_annotations', regex='^(total_annotations|images_reviewed|images_finalized)$'),
+    sort_by: str = Query('total_annotations', pattern='^(total_annotations|images_reviewed|images_finalized)$'),
     limit: int = Query(50, ge=1, le=200),
     ctx: RequestContext = Depends(get_request_context),
 ):
@@ -267,7 +267,7 @@ async def get_organization_users_activity(
 @router.get("/organization/projects", response_model=List[ProjectProgressSummary])
 async def get_organization_projects_progress(
     user_id: Optional[str] = Query(None, description="Filter by user contribution"),
-    status: Optional[str] = Query(None, regex='^(active|completed|stalled)$'),
+    status: Optional[str] = Query(None, pattern='^(active|completed|stalled)$'),
     limit: int = Query(50, ge=1, le=200),
     ctx: RequestContext = Depends(get_request_context),
 ):
@@ -423,7 +423,7 @@ async def get_organization_timeline(
 @router.get("/organization/leaderboard", response_model=List[LeaderboardEntry])
 async def get_organization_leaderboard(
     project_id: Optional[UUID] = Query(None, description="Filter by project"),
-    metric: str = Query('annotations_created', regex='^(annotations_created|images_reviewed|images_finalized)$'),
+    metric: str = Query('annotations_created', pattern='^(annotations_created|images_reviewed|images_finalized)$'),
     period_days: int = Query(30, ge=1, le=365),
     limit: int = Query(10, ge=1, le=100),
     ctx: RequestContext = Depends(get_request_context),

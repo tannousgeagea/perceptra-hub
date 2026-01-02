@@ -28,6 +28,7 @@ services:
     depends_on:
       - rabbitmq
       - postgres
+      - redis
     # deploy:
     #   resources:
     #     reservations:
@@ -81,10 +82,22 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  redis:
+    image: "redis:alpine"
+    container_name: perceptrahub-redis
+    restart: "always"
+    volumes:
+      - cache:/data
+    networks:
+      - internal
+
 
 networks:
   internal:
-    driver: bridge 
+    driver: bridge
+    name: perceptra-net
 
 volumes:
   postgres_data:
+  cache:
+    driver: local

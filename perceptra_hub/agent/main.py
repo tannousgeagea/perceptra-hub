@@ -64,7 +64,7 @@ class AgentClient:
         """Send heartbeat to platform"""
         try:
             response = requests.post(
-                f'{self.api_url}/api/agents/heartbeat',
+                f'{self.api_url}/api/v1/agents/heartbeat',
                 headers=self.headers,
                 json={
                     'status': status,
@@ -74,7 +74,7 @@ class AgentClient:
                 timeout=10
             )
             response.raise_for_status()
-            logger.debug('Heartbeat sent successfully')
+            logger.info('Heartbeat sent successfully')
             return True
         except Exception as e:
             logger.error(f'Failed to send heartbeat: {e}')
@@ -84,7 +84,7 @@ class AgentClient:
         """Poll for next job"""
         try:
             response = requests.get(
-                f'{self.api_url}/api/agents/poll',
+                f'{self.api_url}/api/v1/agents/poll/job',
                 headers=self.headers,
                 timeout=10
             )
@@ -112,7 +112,7 @@ class AgentClient:
         """Report job progress"""
         try:
             response = requests.post(
-                f'{self.api_url}/api/agents/jobs/progress',
+                f'{self.api_url}/api/v1/agents/jobs/progress',
                 headers=self.headers,
                 json={
                     'job_id': job_id,
@@ -141,7 +141,7 @@ class AgentClient:
         """Report job completion"""
         try:
             response = requests.post(
-                f'{self.api_url}/api/agents/jobs/complete',
+                f'{self.api_url}/api/v1/agents/jobs/complete',
                 headers=self.headers,
                 json={
                     'job_id': job_id,
