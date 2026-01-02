@@ -5,6 +5,7 @@ Each adapter handles provider-specific logic for job execution.
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import logging
+from compute.models import ComputeProvider
 
 logger = logging.getLogger(__name__)
 
@@ -1235,3 +1236,225 @@ class KubernetesAdapter(BaseComputeAdapter):
         except Exception as e:
             logger.debug(f"Could not extract metrics: {e}")
             return {}
+        
+
+# ============= Add this class to compute/adapters.py =============
+
+class OnPremiseAgentAdapter(BaseComputeAdapter):
+    """
+    Adapter for on-premise training agents.
+    Submits jobs via Redis queue for agents to pick up.
+    """
+    
+    def submit_job(
+        self,
+        job_config: Dict[str, Any],
+        credentials: Optional[Dict] = None
+    ) -> str:
+        """
+        Submit job to on-premise agent via Redis queue.
+        
+        Process:
+        1. Find available agent for organization
+        2. Assign job to agent via Redis
+        3. Return agent job identifier
+        """
+        from compute.services.agent_manager import AgentManager
+        from compute.models import Agent, TrainingJob
+        from training.models import TrainingSession
+        
+        # Get organization
+        org_id = job_config['organization_id']
+        
+        # Find available agent
+        agent = AgentManager.get_available_agent(
+            organization_id=org_id,
+            required_gpus=job_config.get('gpu_count', 1)
+        )
+        
+        if not agent:
+            raise RuntimeError(
+                f"No available agents for organization {org_id}. "
+                "Please register an agent or wait for existing agents to become available."
+            )
+        
+        logger.info(f"Selected agent {agent.agent_id} for job {job_config['job_id']}")
+        
+        # Get training job and session
+        training_job = TrainingJob.objects.select_related('training_session').get(
+            job_id=job_config['job_id']
+        )
+        
+        # Assign job to agent
+        job_assignment = AgentManager.assign_job_to_agent(
+            training_job=training_job,
+            agent=agent
+        )
+        
+        # Return external job ID
+        external_job_id = f"agent:{agent.agent_id}:{job_config['job_id']}"
+        
+        logger.info(
+            f"Job {job_config['job_id']} assigned to agent {agent.agent_id}"
+        )
+        
+        return external_job_id
+    
+    def get_job_status(self, external_job_id: str) -> Dict[str, Any]:
+        """
+        Get job status from database.
+        Agent updates status via API, we just read it.
+        """
+        from compute.models import TrainingJob
+        
+        try:
+            # Parse external_job_id: "agent:{agent_id}:{job_id}"
+            parts = external_job_id.split(':')
+            if len(parts) != 3:
+                raise ValueError(f"Invalid external_job_id format: {external_job_id}")
+            
+            job_id = parts[2]
+            
+            # Get training job
+            training_job = TrainingJob.objects.select_related(
+                'training_session'
+            ).get(job_id=job_id)
+            
+            session = training_job.training_session
+            
+            # Map session status to adapter status
+            status_mapping = {
+                'queued': 'queued',
+                'initializing': 'running',
+                'running': 'running',
+                'completed': 'completed',
+                'failed': 'failed',
+                'cancelled': 'cancelled',
+            }
+            
+            status = status_mapping.get(session.status, 'queued')
+            
+            return {
+                'status': status,
+                'progress': session.progress,
+                'metrics': session.metrics or {},
+                'error': session.error_message
+            }
+            
+        except TrainingJob.DoesNotExist:
+            logger.error(f"Training job not found for {external_job_id}")
+            return {
+                'status': 'failed',
+                'progress': 0.0,
+                'metrics': {},
+                'error': 'Job not found'
+            }
+        except Exception as e:
+            logger.error(f"Error getting agent job status: {e}")
+            raise
+    
+    def cancel_job(self, external_job_id: str) -> bool:
+        """
+        Cancel agent job.
+        Sets status to cancelled, agent will stop on next poll.
+        """
+        from compute.models import TrainingJob
+        from django.utils import timezone
+        
+        try:
+            # Parse job_id from external_job_id
+            parts = external_job_id.split(':')
+            if len(parts) != 3:
+                return False
+            
+            job_id = parts[2]
+            
+            # Get training job
+            training_job = TrainingJob.objects.select_related(
+                'training_session'
+            ).get(job_id=job_id)
+            
+            session = training_job.training_session
+            
+            # Update status
+            session.status = 'cancelled'
+            session.completed_at = timezone.now()
+            session.save()
+            
+            logger.info(f"Cancelled agent job: {job_id}")
+            return True
+            
+        except TrainingJob.DoesNotExist:
+            logger.error(f"Training job not found: {job_id}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to cancel agent job: {e}")
+            return False
+    
+    def validate_credentials(self, credentials: Dict) -> Dict[str, Any]:
+        """
+        Validate agent availability.
+        On-premise agents don't need credentials, just check if agents exist.
+        """
+        from compute.models import Agent
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        # credentials dict should have 'organization_id'
+        org_id = credentials.get('organization_id')
+        if not org_id:
+            return {
+                'valid': False,
+                'message': 'Organization ID required'
+            }
+        
+        # Check for available agents
+        cutoff = timezone.now() - timedelta(seconds=120)  # 2 minutes
+        
+        active_agents = Agent.objects.filter(
+            organization__org_id=org_id,
+            status__in=['ready', 'busy'],
+            last_heartbeat__gte=cutoff
+        ).count()
+        
+        if active_agents == 0:
+            return {
+                'valid': False,
+                'message': 'No active agents available for organization. Please register an agent.',
+                'details': {'active_agents': 0}
+            }
+        
+        return {
+            'valid': True,
+            'message': f'{active_agents} active agent(s) available',
+            'details': {'active_agents': active_agents}
+        }
+        
+def get_adapter_for_provider(provider: ComputeProvider):
+    """
+    Factory function to get appropriate adapter for provider.
+    """
+    from compute.adapters import (
+        PlatformGPUAdapter,
+        SageMakerAdapter,
+        VertexAIAdapter,
+        AzureMLAdapter,
+        KubernetesAdapter,
+        OnPremiseAgentAdapter,  # ADD THIS
+    )
+    
+    adapters = {
+        'platform-gpu': PlatformGPUAdapter,
+        'platform-cpu': PlatformGPUAdapter,
+        'on-premise-agent': OnPremiseAgentAdapter,  # ADD THIS
+        'aws-sagemaker': SageMakerAdapter,
+        'gcp-vertex': VertexAIAdapter,
+        'azure-ml': AzureMLAdapter,
+        'kubernetes': KubernetesAdapter,
+    }
+    
+    adapter_class = adapters.get(provider.provider_type)
+    if not adapter_class:
+        raise ValueError(f"No adapter for provider type: {provider.provider_type}")
+    
+    return adapter_class(provider)

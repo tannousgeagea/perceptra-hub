@@ -112,8 +112,8 @@ DATABASES = {
 
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
-        'LOCATION': '/var/tmp/django_cache',
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': 'redis://redis:6379',
     }
 }
 
@@ -165,6 +165,7 @@ EMAIL_HOST_USER = "no-reply@perceptra-hub.com"
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")  # Use an env variable!
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 SECRET_ENCRYPTION_KEY = os.getenv("SECRET_ENCRYPTION_KEY")
+COMPUTE_CREDENTIALS_KEY = env("COMPUTE_CREDENTIALS_KEY")
 
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/

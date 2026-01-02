@@ -7,7 +7,7 @@ from django.utils import timezone
 import logging
 import traceback
 from pathlib import Path
-from common_utils.training.trainers.base import TrainingCallbacks
+from training.trainers.base import TrainingCallbacks
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +29,8 @@ def train_model_on_platform_gpu(
     """
     from ml_models.models import ModelVersion
     from training.models import TrainingSession
-    from common_utils.training.trainers.factory import TrainerFactory
-    from common_utils.training.trainers.base import TrainingConfig, TrainingCallbacks
+    from training.trainers.factory import TrainerFactory
+    from training.trainers.base import TrainingConfig, TrainingCallbacks
     
     logger.info(f"Starting training for job {job_id}")
     

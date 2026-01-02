@@ -418,35 +418,3 @@ class TrainingOrchestrator:
         cipher = Fernet(settings.COMPUTE_CREDENTIALS_KEY.encode())
         decrypted = cipher.decrypt(encrypted_creds['encrypted'].encode())
         return json.loads(decrypted)
-
-
-# ============= Provider Adapter Factory =============
-
-def get_adapter_for_provider(provider: ComputeProvider):
-    """
-    Factory function to get appropriate adapter for provider.
-    """
-    from compute.adapters import (
-        PlatformGPUAdapter,
-        SageMakerAdapter,
-        VertexAIAdapter,
-        AzureMLAdapter,
-        KubernetesAdapter,
-        ModalAdapter
-    )
-    
-    adapters = {
-        'platform-gpu': PlatformGPUAdapter,
-        'platform-cpu': PlatformGPUAdapter,  # Same adapter, different config
-        'aws-sagemaker': SageMakerAdapter,
-        'gcp-vertex': VertexAIAdapter,
-        'azure-ml': AzureMLAdapter,
-        'kubernetes': KubernetesAdapter,
-        'modal': ModalAdapter,
-    }
-    
-    adapter_class = adapters.get(provider.provider_type)
-    if not adapter_class:
-        raise ValueError(f"No adapter for provider type: {provider.provider_type}")
-    
-    return adapter_class(provider)

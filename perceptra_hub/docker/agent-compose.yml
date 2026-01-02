@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  agent:
+    build:
+      context: ..
+      dockerfile: docker/agent.Dockerfile
+    container_name: cv-training-agent
+    restart: unless-stopped
+    
+    # GPU access
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    # Environment variables (override with .env file)
+    # environment:
+    #   - API_URL=${API_URL}
+    #   - AGENT_KEY=${AGENT_KEY}
+    #   - AGENT_SECRET=${AGENT_SECRET}
+    #   - AGENT_ID=${AGENT_ID}
+    #   - POLL_INTERVAL=${POLL_INTERVAL:-10}
+    #   - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-30}
+    #   - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+    
+    # Volumes for persistent data
+    volumes:
+      - agent-datasets:/tmp/agent-work/datasets
+      - agent-outputs:/tmp/agent-work/outputs
+      # Optional: Mount local datasets
+      # - /path/to/your/datasets:/tmp/agent-work/datasets
+    env_file: ../agent/.env
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Network mode
+    networks:
+      - perceptra-net
+
+volumes:
+  agent-datasets:
+  agent-outputs:
+
+networks:
+  perceptra-net:
+    external: true
