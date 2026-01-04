@@ -270,7 +270,7 @@ class AgentManager:
     def get_agent_active_jobs(cls, agent: Agent) -> List[str]:
         """Get list of active job IDs for agent"""
         queue_key = f"agent:{agent.agent_id}:jobs"
-        job_ids = cache.lrange(queue_key, 0, -1) or []
+        job_ids = cache.get(queue_key, 0, -1) or []
         return [jid.decode() if isinstance(jid, bytes) else jid for jid in job_ids]
     
     @classmethod

@@ -57,9 +57,12 @@ class AgentListResponse(BaseModel):
     status: str
     is_online: bool
     gpu_count: int
+    gpu_info: List[Dict]
+    system_info: Dict
     active_jobs: int
     max_concurrent_jobs: int
     last_heartbeat: Optional[str]
+    uptime_seconds: Optional[float]
     created_at: str
 
 class HeartbeatRequest(BaseModel):
