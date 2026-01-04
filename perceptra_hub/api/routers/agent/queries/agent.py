@@ -12,6 +12,7 @@ from api.dependencies import get_request_context, RequestContext
 from compute.models import Agent, AgentAPIKey, ComputeProvider
 from compute.services.agent_manager import AgentManager
 from django.db.models import Q
+from django.utils import timezone
 from asgiref.sync import sync_to_async
 from api.routers.agent.schemas import *
 from api.routers.agent.utils import *
@@ -98,10 +99,13 @@ async def list_agents(
                 status=agent.status,
                 is_online=agent.is_online,
                 gpu_count=agent.gpu_count,
+                gpu_info=agent.gpu_info,
+                system_info=agent.system_info,
                 active_jobs=len(active_jobs),
                 max_concurrent_jobs=agent.max_concurrent_jobs,
                 last_heartbeat=agent.last_heartbeat.isoformat() if agent.last_heartbeat else None,
-                created_at=agent.created_at.isoformat()
+                created_at=agent.created_at.isoformat(),
+                uptime_seconds=(timezone.now() - agent.created_at).total_seconds() if agent.last_heartbeat else None
             ))
         
         return results
