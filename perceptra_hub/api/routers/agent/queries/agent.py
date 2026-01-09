@@ -312,7 +312,6 @@ async def poll_for_job(
     """
     
     import logging
-    logging.error(f"Polling Agent")
     @sync_to_async
     def poll():
         return AgentManager.poll_job(agent)

@@ -117,6 +117,13 @@ CACHES = {
     }
 }
 
+
+CACHE_BACKEND = {
+    'backend': 'redis',
+    'host': os.getenv('REDIS_HOST', 'localhost'),
+    'port': int(os.getenv('REDIS_PORT', 6379)),
+    'db': 0
+}
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
 
