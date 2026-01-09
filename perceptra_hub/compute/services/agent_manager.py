@@ -4,11 +4,14 @@ File: compute/services/agent_manager.py
 """
 import logging
 import uuid
+import json
 from typing import Optional, Dict, Any, List
 from datetime import timedelta
 
 from django.utils import timezone
-from django.core.cache import cache
+
+from common_utils.cache.cache_service import CacheService
+cache = CacheService.get_backend()
 from django.db import transaction
 
 from compute.models import Agent, AgentAPIKey, TrainingJob
@@ -167,11 +170,11 @@ class AgentManager:
         # Cache agent status for quick checks
         cache.set(
             cls.AGENT_STATUS_KEY.format(agent_id=agent.agent_id),
-            {
+            json.dumps({
                 'status': status,
                 'gpu_count': agent.gpu_count,
                 'last_heartbeat': agent.last_heartbeat.isoformat()
-            },
+            }),
             timeout=cls.HEARTBEAT_TIMEOUT
         )
         
@@ -190,7 +193,6 @@ class AgentManager:
         Returns:
             Job assignment dict
         """
-        from django.core.cache import cache
         import json
         
         # Build job config
@@ -270,7 +272,7 @@ class AgentManager:
     def get_agent_active_jobs(cls, agent: Agent) -> List[str]:
         """Get list of active job IDs for agent"""
         queue_key = f"agent:{agent.agent_id}:jobs"
-        job_ids = cache.get(queue_key, 0, -1) or []
+        job_ids = cache.lrange(queue_key, 0, -1) or []
         return [jid.decode() if isinstance(jid, bytes) else jid for jid in job_ids]
     
     @classmethod
@@ -282,7 +284,7 @@ class AgentManager:
         queue_key = f"agent:{agent.agent_id}:jobs"
         
         # Pop job from queue (blocking pop with timeout)
-        job_id = cache.get(queue_key)
+        job_id = cache.rpop(queue_key)
         
         if not job_id:
             return None
