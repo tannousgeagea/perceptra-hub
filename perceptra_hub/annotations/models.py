@@ -60,6 +60,8 @@ class AnnotationType(models.Model):
         return self.name
     
 class Annotation(models.Model):
+    MINOR_EDIT_THRESHOLD = 0.1
+    MAJOR_EDIT_THRESHOLD = 0.4
     SIGNIFICANT_CHANGE_THRESHOLD = 0.4
     ANNOTATION_SOURCE_CHOICES = [
         ('manual', 'Manual Annotation'),
@@ -91,8 +93,6 @@ class Annotation(models.Model):
         help_text=_('When annotations were reviewed')
     )
     reviewed_by = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True, related_name='annotations_reviewed')
-
-    # Status
     is_active = models.BooleanField(default=True, db_index=True)
     version = models.IntegerField(default=1)
     
@@ -136,14 +136,41 @@ class Annotation(models.Model):
         blank=True,
         help_text="Type of edit made"
     )
+    
+    original_data = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Original bbox before any edits [x1,y1,x2,y2]"
+    )
+
+    original_class = models.ForeignKey(
+        AnnotationClass,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='original_predictions'
+    )
+
+    model_version = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="e.g. 'yolov8-large-v2.1'"
+    )
 
     class Meta:
         db_table = 'annotation'
         verbose_name_plural = 'Annotations'
         indexes = [
             models.Index(fields=['project_image', 'is_active']),
+            models.Index(fields=['project_image', 'is_deleted']),
+            
             models.Index(fields=['annotation_source', 'is_active']),
+            models.Index(fields=['annotation_source', 'is_deleted']),
+            
             models.Index(fields=['annotation_class', 'is_active']),
+            models.Index(fields=['annotation_class', 'is_deleted']),
             models.Index(fields=['created_at']),
             models.Index(fields=['annotation_uid']),  # Already unique, but explicit
         ]
@@ -152,47 +179,79 @@ class Annotation(models.Model):
         return f"{self.project_image.project.name} - {self.annotation_class.name}"
     
     def clean(self):
-        # Validate data format
-        if self.data and isinstance(self.data, list) and len(self.data) == 4:
-            self.data = [max(0, min(1, float(coord))) for coord in self.data]
-            # Calculate area
-            self.area = (self.data[2] - self.data[0]) * (self.data[3] - self.data[1])
-        else:
+        if not (
+            isinstance(self.data, list)
+            and len(self.data) == 4
+        ):
             raise ValidationError("Data must be [xmin, ymin, xmax, ymax]")
+
+        try:
+            self.data = [max(0, min(1, float(c))) for c in self.data]
+        except (TypeError, ValueError):
+            raise ValidationError("Bounding box coordinates must be numeric")    
     
-            # Track edits to predictions
-        if self.pk and self.annotation_source == 'prediction':
-            try:
-                old = Annotation.objects.get(pk=self.pk)
-                
-                # Check class change
-                class_changed = old.annotation_class_id != self.annotation_class_id
-                
-                # Check bbox change magnitude
-                bbox_change = self.calculate_bbox_change(old.data, self.data)
-                
-                # Significant change threshold (IoU < 0.8 means 20%+ change)
-                self.edit_magnitude = bbox_change  # Store for audit
-                                
-                if class_changed or bbox_change > self.SIGNIFICANT_CHANGE_THRESHOLD or not self.is_active:
-                    self.version += 1  # Major edit
-                    if class_changed:
-                        self.edit_type = self.EditType.CLASS_CHANGE
-                    elif not self.is_active:
-                        self.edit_type = self.EditType.DELETED
-                    elif bbox_change > self.SIGNIFICANT_CHANGE_THRESHOLD:
-                        self.edit_type = self.EditType.MAJOR
-                else:
-                    self.edit_type = self.EditType.MINOR
-         
-            except Annotation.DoesNotExist:
-                pass
-    
+    def _apply_prediction_edit_tracking(self, old: "Annotation"):
+        """
+        Compare previous and current state and update
+        version, edit_type, edit_magnitude, original_*.
+        """
+        # Store original once
+        if not self.original_data:
+            if old.data != self.data or old.annotation_class_id != self.annotation_class_id:
+                self.original_data = old.data
+                self.original_class = old.annotation_class
+
+        class_changed = old.annotation_class_id != self.annotation_class_id
+        bbox_change = self.calculate_bbox_change(old.data, self.data)
+        self.edit_magnitude = bbox_change
+
+        if self.is_deleted:
+            self.edit_type = self.EditType.DELETED
+            self.version += 1
+            return
+
+        if class_changed:
+            self.edit_type = self.EditType.CLASS_CHANGE
+            self.version += 1
+            return
+
+        if bbox_change >= self.MAJOR_EDIT_THRESHOLD:
+            self.edit_type = self.EditType.MAJOR
+            self.version += 1
+            return
+
+        if bbox_change >= self.MINOR_EDIT_THRESHOLD:
+            self.edit_type = self.EditType.MINOR
+            return
+
+        self.edit_type = self.EditType.NONE    
     
     def save(self, *args, **kwargs):
-        self.full_clean()  # Always validate
+        is_update = self.pk is not None
+        old = None
+
+        if is_update and self.annotation_source == 'prediction':
+            old = Annotation.objects.only(
+                "data",
+                "annotation_class_id",
+                "is_deleted",
+                "version",
+            ).get(pk=self.pk)
+
         super().save(*args, **kwargs)
         
+        if old:
+            self._apply_prediction_edit_tracking(old)
+            super().save(
+                update_fields=[
+                    "version",
+                    "edit_type",
+                    "edit_magnitude",
+                    "original_data",
+                    "original_class",
+                ]
+            )
+            
     def soft_delete(self, user=None):
         """Soft delete the project"""
         from django.utils import timezone
@@ -258,7 +317,11 @@ class AnnotationAudit(models.Model):
         blank=True,
         related_name="matched_predictions"
     )
-    iou = models.FloatField(null=True, blank=True)
+    localization_iou = models.FloatField(
+        null=True, 
+        blank=True,
+        help_text="IoU between original_data and current data (for edited TPs)"
+    )
     reviewed_at = models.DateTimeField(auto_now=True)
     reviewed_by = models.ForeignKey(
         User,
@@ -267,6 +330,13 @@ class AnnotationAudit(models.Model):
         blank=True,
         related_name='audits_reviewed'
     )
+    
+    original_confidence = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Model confidence before any changes"
+    )
+    
     class Meta:
         db_table = 'annotation_audit'
         verbose_name_plural = "Annotation Audits"

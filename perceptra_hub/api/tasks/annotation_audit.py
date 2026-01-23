@@ -20,7 +20,8 @@ def calculate_iou(box1, box2):
 
 @shared_task(
     bind=True, 
-    name='annotation_audit:compute_annotation_audit'
+    name='annotation_audit:compute_annotation_audit',
+    max_retries=3,
 )
 def compute_annotation_audit(self, instance_id: int, created: bool, **kwargs):
     """
@@ -35,6 +36,8 @@ def compute_annotation_audit(self, instance_id: int, created: bool, **kwargs):
     
     status = 'N/A'
     try:
+        
+        print("ID", instance_id)
         instance = Annotation.objects.get(id=instance_id)
     except Annotation.DoesNotExist as e:
         return {
@@ -49,7 +52,7 @@ def compute_annotation_audit(self, instance_id: int, created: bool, **kwargs):
         edit_type = instance.edit_type or Annotation.EditType.NONE
         
         # Determine audit status
-        if not instance.is_active:
+        if instance.is_deleted:
             # Deleted
             status = 'FP'
             edit_type = 'deleted'
@@ -82,6 +85,7 @@ def compute_annotation_audit(self, instance_id: int, created: bool, **kwargs):
         
         AnnotationAudit.objects.update_or_create(
             annotation=instance,
+            localization_iou=(1 - instance.edit_magnitude) if instance.edit_magnitude else None,
             defaults={
                 'evaluation_status': status,
                 'was_edited': instance.version > 1,
