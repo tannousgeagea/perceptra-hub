@@ -1,10 +1,11 @@
 # tasks.py
 from celery import shared_task
 import numpy as np
+from typing import Optional
 from datetime import datetime
 from django.db import transaction
 
-def calculate_iou(box1, box2):
+def compute_iou(box1, box2):
     """Calculate IoU between two boxes [xmin, ymin, xmax, ymax]."""
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
@@ -16,7 +17,38 @@ def calculate_iou(box1, box2):
     area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
     union = area1 + area2 - intersection
     
-    return intersection / union if union > 0 else 0
+    return intersection / union if union > 0 else 0.
+
+# ================================================================
+# HELPER FUNCTIONS
+# ================================================================
+
+def find_matching_ground_truth(prediction):
+    """
+    Find ground truth annotation that matches this prediction.
+    Returns the GT with highest IoU above threshold.
+    """
+    from annotations.models import Annotation
+    
+    # Get all manual annotations on same image with same class
+    candidates = Annotation.objects.filter(
+        project_image=prediction.project_image,
+        annotation_class=prediction.annotation_class,
+        annotation_source='manual',
+        is_active=True,
+        is_deleted=False
+    )
+    
+    best_match = None
+    best_iou = 0.5  # Minimum threshold
+    
+    for gt in candidates:
+        iou = compute_iou(prediction.data, gt.data)
+        if iou > best_iou:
+            best_iou = iou
+            best_match = gt
+    
+    return best_match
 
 @shared_task(
     bind=True, 
@@ -34,10 +66,7 @@ def compute_annotation_audit(self, instance_id: int, created: bool, **kwargs):
     """
     from annotations.models import Annotation, AnnotationAudit
     
-    status = 'N/A'
     try:
-        
-        print("ID", instance_id)
         instance = Annotation.objects.get(id=instance_id)
     except Annotation.DoesNotExist as e:
         return {
@@ -45,8 +74,24 @@ def compute_annotation_audit(self, instance_id: int, created: bool, **kwargs):
             "detail": f"Invalid Reference: {str(e)}",
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
+    
+    status = 'N/A'    
+    localization_iou = None
+    match_iou = None
+    matched_gt = None
         
     if instance.annotation_source == 'prediction':
+        
+        if instance.edit_magnitude:
+            localization_iou = 1 - instance.edit_magnitude
+        
+        # 2. IOU: Prediction vs ground truth (match quality)
+        if instance.is_active and not instance.is_deleted:
+            # Find matching ground truth annotation
+            matched_gt = find_matching_ground_truth(instance)
+            
+            if matched_gt:
+                match_iou = compute_iou(instance.data, matched_gt.data)
         
         edit_mag = instance.edit_magnitude or 0
         edit_type = instance.edit_type or Annotation.EditType.NONE
@@ -85,12 +130,16 @@ def compute_annotation_audit(self, instance_id: int, created: bool, **kwargs):
         
         AnnotationAudit.objects.update_or_create(
             annotation=instance,
-            localization_iou=(1 - instance.edit_magnitude) if instance.edit_magnitude else None,
             defaults={
                 'evaluation_status': status,
                 'was_edited': instance.version > 1,
                 'edit_magnitude': edit_mag,
-                'edit_type': edit_type
+                'edit_type': edit_type,
+
+                # ✓ BOTH IoU values
+                'localization_iou': localization_iou,  # Original → Edited
+                'iou': match_iou,                       # Prediction → GT
+                'matched_manual_annotation': matched_gt,
             }
         )
     
@@ -101,7 +150,9 @@ def compute_annotation_audit(self, instance_id: int, created: bool, **kwargs):
             annotation=instance,
             defaults={
                 'evaluation_status': 'FN',
-                'was_edited': False
+                'was_edited': False,
+                'iou': None,              # No prediction to match
+                'localization_iou': None, # No edit occurred
             }
         )
     
@@ -110,6 +161,8 @@ def compute_annotation_audit(self, instance_id: int, created: bool, **kwargs):
         'status': 'completed',
         'evaluation_status': status,
         "annotation_source": instance.annotation_source,
+        'localization_iou': localization_iou,
+        'match_iou': match_iou,
     }
 
 

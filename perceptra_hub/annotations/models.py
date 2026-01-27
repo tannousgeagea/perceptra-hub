@@ -317,6 +317,7 @@ class AnnotationAudit(models.Model):
         blank=True,
         related_name="matched_predictions"
     )
+    iou = models.FloatField(null=True, blank=True)
     localization_iou = models.FloatField(
         null=True, 
         blank=True,

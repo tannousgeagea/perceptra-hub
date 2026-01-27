@@ -5,12 +5,13 @@ import inspect
 import importlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 import sys
 from pathlib import Path
 base_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(base_dir))
 from api.config.celery_utils import celery_app
+from api.error_handling import setup_exception_handlers
+
 
 ROUTERS_DIR = os.path.dirname(__file__) + "/routers"
 ROUTERS = [
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
     return app
 
 app = create_app()
+setup_exception_handlers(app)
 celery = app.celery_app
 celery.autodiscover_tasks(['api.tasks'])
 
