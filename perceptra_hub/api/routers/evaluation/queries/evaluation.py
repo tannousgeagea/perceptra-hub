@@ -7,7 +7,10 @@ Optimized queries with select_related, prefetch_related for N+1 prevention.
 """
 
 import orjson
-from typing import List, Optional, Dict, Any
+import time
+from fastapi.routing import APIRoute
+from fastapi import Request, Response
+from typing import List, Optional, Dict, Any, Callable
 from datetime import datetime
 from uuid import UUID
 from enum import Enum
@@ -26,6 +29,7 @@ from asgiref.sync import sync_to_async
 from annotations.models import Annotation, AnnotationAudit, ProjectImage, AnnotationClass
 from projects.models import Project
 from api.routers.evaluation.schemas import *
+from api.routers.evaluation.cache import get_evaluation_cache, CacheKeyBuilder
 
 
 # ============================================================================
@@ -529,7 +533,22 @@ def transform_image_to_response(
 # API ROUTER
 # ============================================================================
 
-router = APIRouter(prefix="/evaluation", tags=["evaluation"])
+class TimedRoute(APIRoute):
+    def get_route_handler(self) -> Callable:
+        original_route_handler = super().get_route_handler()
+        async def custom_route_handler(request: Request) -> Response:
+            before = time.time()
+            response: Response = await original_route_handler(request)
+            duration = time.time() - before
+            response.headers["X-Response-Time"] = str(duration)
+            print(f"route duration: {duration}")
+            print(f"route response: {response}")
+            print(f"route response headers: {response.headers}")
+            return response
+
+        return custom_route_handler
+
+router = APIRouter(prefix="/evaluation", tags=["evaluation"], route_class=TimedRoute)
 
 
 @router.get(
@@ -559,60 +578,85 @@ async def get_project_evaluation(
     """
     
     # Fetch images using optimized query
-    query_builder = EvaluationQueryBuilder()
+    cache = get_evaluation_cache()
     
-    try:
-        images_data, total_count = await query_builder.get_evaluated_images(
-            project_id=project_id,
-            model_version=model_version,
-            reviewed_only=reviewed_only,
-            has_errors_only=has_errors_only,
-            class_ids=class_ids,
-            min_confidence=min_confidence,
-            evaluation_status=[s.value for s in evaluation_status] if evaluation_status else None,
+    # Build filters for cache key
+    filters = {
+        "model_version": model_version,
+        "reviewed_only": reviewed_only,
+        "has_errors_only": has_errors_only,
+        "class_ids": class_ids,
+        "min_confidence": min_confidence,
+        "evaluation_status": [s.value for s in evaluation_status] if evaluation_status else None,
+    }
+    
+    # Build cache key
+    cache_key = CacheKeyBuilder.image_list_key(project_id, page, page_size, filters)
+    
+    async def compute():
+        query_builder = EvaluationQueryBuilder()
+        try:
+            images_data, total_count = await query_builder.get_evaluated_images(
+                project_id=project_id,
+                model_version=model_version,
+                reviewed_only=reviewed_only,
+                has_errors_only=has_errors_only,
+                class_ids=class_ids,
+                min_confidence=min_confidence,
+                evaluation_status=[s.value for s in evaluation_status] if evaluation_status else None,
+                page=page,
+                page_size=page_size,
+            )
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")
+        
+        # Transform to response models
+        images = []
+        image_summaries = []
+        
+        for img_data in images_data:
+            try:
+                img_response = await transform_image_to_response(img_data, include_summary=True)
+                images.append(img_response)
+                
+                if img_response.evaluation:
+                    image_summaries.append(img_response.evaluation)
+            except Exception as e:
+                # Log but don't fail entire request for one bad image
+                print(f"Error transforming image {img_data.image_id}: {e}")
+                continue
+        
+        # Compute dataset summary
+        dataset_summary = query_builder.compute_dataset_summary(image_summaries)
+        
+        # Build response
+        response = EvaluationResponse(
+            images=images,
+            summary=dataset_summary,
+            total_count=total_count,
             page=page,
             page_size=page_size,
+            has_next=page * page_size < total_count,
+            filter_applied={
+                "model_version": model_version,
+                "reviewed_only": reviewed_only,
+                "has_errors_only": has_errors_only,
+                "class_ids": class_ids,
+                "min_confidence": min_confidence,
+            }
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")
+        
+        return response.model_dump()
     
-    # Transform to response models
-    images = []
-    image_summaries = []
-    
-    for img_data in images_data:
-        try:
-            img_response = await transform_image_to_response(img_data, include_summary=True)
-            images.append(img_response)
-            
-            if img_response.evaluation:
-                image_summaries.append(img_response.evaluation)
-        except Exception as e:
-            # Log but don't fail entire request for one bad image
-            print(f"Error transforming image {img_data.image_id}: {e}")
-            continue
-    
-    # Compute dataset summary
-    dataset_summary = query_builder.compute_dataset_summary(image_summaries)
-    
-    # Build response
-    response = EvaluationResponse(
-        images=images,
-        summary=dataset_summary,
-        total_count=total_count,
-        page=page,
-        page_size=page_size,
-        has_next=page * page_size < total_count,
-        filter_applied={
-            "model_version": model_version,
-            "reviewed_only": reviewed_only,
-            "has_errors_only": has_errors_only,
-            "class_ids": class_ids,
-            "min_confidence": min_confidence,
-        }
+    # Get from cache or compute (10 min TTL)
+    response_dict = await cache.get_or_compute(
+        cache_key,
+        compute,
+        cache.config.image_list_ttl
     )
     
-    return response
+    return EvaluationResponse(**response_dict)
 
 
 @router.get(
@@ -629,12 +673,19 @@ async def get_class_metrics(
     Get performance breakdown by class.
     Uses database aggregation for optimal performance.
     """
-    
+    cache = get_evaluation_cache()
     query_builder = EvaluationQueryBuilder()
-    metrics = await query_builder.get_class_metrics(
+    async def compute():
+        return await query_builder.get_class_metrics(
+            project_id=project_id,
+            model_version=model_version,
+            reviewed_only=reviewed_only
+        )
+        
+    metrics = await cache.get_class_metrics(
         project_id=project_id,
         model_version=model_version,
-        reviewed_only=reviewed_only
+        compute_fn=compute
     )
     
     return [PerClassMetrics(**m) for m in metrics]
@@ -654,13 +705,25 @@ async def get_quick_summary(
     Returns only aggregated metrics using database aggregation.
     """
     
+    cache = get_evaluation_cache()
     query_builder = EvaluationQueryBuilder()
-    summary = await query_builder.get_quick_summary(
+
+    # Define compute function
+    async def compute():
+        summary = await query_builder.get_quick_summary(
+            project_id=project_id,
+            model_version=model_version
+        )
+        return summary.dict()
+    
+    # Get from cache or compute
+    summary_dict = await cache.get_summary(
         project_id=project_id,
-        model_version=model_version
+        model_version=model_version,
+        compute_fn=compute
     )
     
-    return summary
+    return DatasetEvaluationSummary(**summary_dict)
 
 
 @router.get("/health", include_in_schema=False)

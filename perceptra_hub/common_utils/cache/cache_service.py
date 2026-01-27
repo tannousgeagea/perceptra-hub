@@ -92,6 +92,11 @@ class BaseCacheBackend(ABC):
         """Clear all cache (use with caution)"""
         pass
 
+    @abstractmethod
+    def scan_delete(self, pattern: str) -> int:
+        """Delete keys matching pattern"""
+        pass
+
 
 # ============= Redis Backend =============
 
@@ -227,6 +232,22 @@ class RedisCacheBackend(BaseCacheBackend):
             logger.error(f"Redis clear error: {e}")
             return False
 
+
+    def scan_delete(self, pattern: str) -> int:
+        """Delete keys matching pattern"""
+        try:
+            cursor = 0
+            count = 0
+            while True:
+                cursor, keys = self.client.scan(cursor, match=pattern, count=100)
+                if keys:
+                    count += self.client.delete(*keys)
+                if cursor == 0:
+                    break
+            return count
+        except Exception as e:
+            logger.error(f"Redis scan_delete error: {e}")
+            return 0
 
 # ============= Memcached Backend (Optional) =============
 
