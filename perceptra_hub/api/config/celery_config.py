@@ -158,6 +158,13 @@ class BaseConfig:
             "queue": 'activity'
         }
     },
+    
+    # Metric snapshot
+    'create-daily-snapshots': {
+        'task': 'api.tasks.evaluation.metric_snapshot.create_daily_snapshots',
+        'schedule': crontab(hour=2, minute=0),  # 2 AM daily
+        'options': {'expires': 3600}  # Task expires after 1 hour
+    },
 }
 
 

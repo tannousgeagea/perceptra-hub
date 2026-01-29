@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     'authentication',
     'billing',
     'compute',
+    'temporal_analysis',
 ]
 
 MIDDLEWARE = [
