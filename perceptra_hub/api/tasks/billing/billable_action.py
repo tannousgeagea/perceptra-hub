@@ -9,7 +9,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3, queue="activity", name="activity:create_billable_action_from_event")
+@shared_task(
+    bind=True, 
+    max_retries=3, 
+    queue="activity", 
+    name="activity:create_billable_action_from_event"
+)
 def create_billable_action_from_event(self, event_id):
     """
     Convert ActivityEvent into BillableAction(s) for billing.
