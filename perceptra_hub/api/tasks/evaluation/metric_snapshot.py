@@ -10,6 +10,7 @@ def create_daily_snapshots():
     from projects.models import Project
     from temporal_analysis.models import MetricSnapshot
     from api.routers.evaluation.queries.evaluation import EvaluationQueryBuilder
+    from .alert import check_metric_alerts
     
     active_projects = Project.objects.filter(is_active=True, is_deleted=False)
     
@@ -44,7 +45,7 @@ def create_daily_snapshots():
             summary = asyncio.run(get_metrics())
             
             # Create snapshot
-            MetricSnapshot.objects.create(
+            snapshot = MetricSnapshot.objects.create(
                 project=project,
                 model_version=model_version,
                 total_images=summary.total_images,
@@ -61,6 +62,9 @@ def create_daily_snapshots():
                 computation_time_seconds=time.time() - start_time,
             )
             
+            
+            check_metric_alerts.delay(project.id, snapshot.id)
+
             results['snapshots_created'] += 1
             results['total_projects'] += 1
             
