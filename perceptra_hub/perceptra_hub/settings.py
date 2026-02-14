@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'billing',
     'compute',
     'temporal_analysis',
+    'api_keys',
 ]
 
 MIDDLEWARE = [
@@ -255,47 +256,6 @@ UNFOLD = {
                     },
                 ]
             },
-            # {
-            #     "title": _("Tenant"),
-            #     "collapsible": True,
-            #     "items": [
-            #         {
-            #             "title": _("Tenant"),
-            #             "icon": 'tenancy',
-            #             "link": reverse_lazy(
-            #                 "admin:tenants_tenant_changelist"
-            #             ),
-            #         },
-            #         {
-            #             "title": _("Plant"),
-            #             "icon": 'local_fire_department',
-            #             "link": reverse_lazy(
-            #                 "admin:tenants_plant_changelist"
-            #             ),
-            #         },
-            #         {
-            #             "title": _("Domain"),
-            #             "icon": 'domain',
-            #             "link": reverse_lazy(
-            #                 "admin:tenants_domain_changelist"
-            #             ),
-            #         },
-            #         {
-            #             "title": _("Edge Boxes"),
-            #             "icon": 'devices',
-            #             "link": reverse_lazy(
-            #                 "admin:tenants_edgebox_changelist"
-            #             ),
-            #         },
-            #         {
-            #             "title": _("SensorBoxes"),
-            #             "icon": 'sensors',
-            #             "link": reverse_lazy(
-            #                 "admin:tenants_sensorbox_changelist"
-            #             ),
-            #         },
-            #     ]
-            # },
             {
                 "title": _("Users & Groups"),
                 "collapsible": True,
@@ -325,6 +285,33 @@ UNFOLD = {
                         "icon": "domain",
                         "link": reverse_lazy(
                             "admin:organizations_organization_changelist"
+                            ),
+                    },
+                ],
+            },
+            {
+                "title": _("API Keys"),
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": _("API Keys"),
+                        "icon": "key",
+                        "link": reverse_lazy(
+                            "admin:api_keys_apikey_changelist"
+                            ),
+                    },
+                    {
+                        "title": _("API Key Usage Logs"),
+                        "icon": "history_toggle_off",
+                        "link": reverse_lazy(
+                            "admin:api_keys_apikeyusagelog_changelist"
+                            ),
+                    },
+                    {
+                        "title": _("API Key Rate Limit"),
+                        "icon": "data_thresholding",
+                        "link": reverse_lazy(
+                            "admin:api_keys_apikeyratelimit_changelist"
                             ),
                     },
                 ],
