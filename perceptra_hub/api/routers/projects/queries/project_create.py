@@ -204,7 +204,11 @@ async def validate_organization(organization_id: Optional[int]):
 
 
 @sync_to_async
-def create_project_with_membership(ctx: RequestContext, project_data: ProjectCreate, project_type, visibility):
+def create_project_with_membership(
+    ctx: RequestContext, 
+    project_data: ProjectCreate, 
+    project_type, visibility
+    ):
     """Create project with initial membership for creator."""
     with transaction.atomic():
         # Create the project
