@@ -548,7 +548,7 @@ class TimedRoute(APIRoute):
 
         return custom_route_handler
 
-router = APIRouter(prefix="/evaluation", tags=["evaluation"], route_class=TimedRoute)
+router = APIRouter(prefix="/evaluation", route_class=TimedRoute)
 
 
 @router.get(

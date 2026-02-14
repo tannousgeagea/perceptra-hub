@@ -35,7 +35,7 @@ class TimedRoute(APIRoute):
 
 router = APIRouter(
     prefix="/api/v1",
-    tags=["evaluation"],
+    tags=["Evaluation"],
     route_class=TimedRoute,
     responses={404: {"description": "Not found"}},
 )

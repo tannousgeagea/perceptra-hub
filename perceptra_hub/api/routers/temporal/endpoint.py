@@ -11,7 +11,7 @@ from fastapi.routing import APIRoute
 
 QUERIES_DIR = os.path.dirname(__file__) + "/queries"
 QUERIES = [
-    f"api.routers.storage.queries.{f.replace('/', '.')[:-3]}" 
+    f"api.routers.temporal.queries.{f.replace('/', '.')[:-3]}" 
     for f in os.listdir(QUERIES_DIR) 
     if f.endswith('.py') 
     if not f.endswith('__.py')
@@ -35,6 +35,7 @@ class TimedRoute(APIRoute):
 
 router = APIRouter(
     prefix="/api/v1",
+    tags=["Temporal Analysis"],
     route_class=TimedRoute,
     responses={404: {"description": "Not found"}},
 )
@@ -43,3 +44,4 @@ router = APIRouter(
 for Q in QUERIES:
     module = importlib.import_module(Q)
     router.include_router(module.router)
+    
