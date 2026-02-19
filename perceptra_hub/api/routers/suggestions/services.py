@@ -87,12 +87,12 @@ class SuggestionService:
             source_type=source_type.value
         )
         
-    def store_suggestions(self, session_id: UUID, suggestions: List[Suggestion]):
+    async def store_suggestions(self, session_id: UUID, suggestions: List[Suggestion]):
         data = [s.model_dump() for s in suggestions]
         self.redis.set(self._cache_key(session_id), json.dumps(data), self.suggestion_ttl)
     
         # Update session count in DB
-        self._update_session_count(session_id, len(suggestions))
+        await self._update_session_count(session_id, len(suggestions))
     
     @sync_to_async
     def load_image(self, image_id: int) -> np.ndarray:

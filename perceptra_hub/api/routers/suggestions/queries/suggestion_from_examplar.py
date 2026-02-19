@@ -60,7 +60,7 @@ async def segment_from_exemplar(
     
     suggestions = [
         Suggestion(
-            id=str(uuid_lib.uuid4()),
+            suggestion_id=str(uuid_lib.uuid4()),
             bbox=BoundingBox(x=o.bbox[0], y=o.bbox[1],
                              width=o.bbox[2], height=o.bbox[3]),
             mask_rle=o.mask_rle,
@@ -81,6 +81,10 @@ async def segment_from_exemplar(
         status="ready",
         source_type=SuggestionSourceType.SIMILAR_OBJECT,
         suggestions=suggestions,
-        config=ModelConfig(...),
+        config=ModelConfig(
+            model=session.model_name,
+            device=session.model_device,
+            precision=session.model_precision    
+        ),
         count=len(suggestions)
     )
