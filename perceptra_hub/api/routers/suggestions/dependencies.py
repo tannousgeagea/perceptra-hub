@@ -1,12 +1,13 @@
 from typing import Optional
 from fastapi import Depends
 from .segmentation_service import SegmentationService
+from .segmentation_service_mock import MockSegmentationService
 from .services import SuggestionService
 from .schemas import ModelConfig
 
-def get_segmentation_service() -> SegmentationService:
+def get_segmentation_service() -> MockSegmentationService:
     """Singleton service instance."""
-    return SegmentationService()
+    return MockSegmentationService()
 
 def get_suggestion_service() -> SuggestionService:
     return SuggestionService()

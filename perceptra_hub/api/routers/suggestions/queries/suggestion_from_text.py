@@ -65,5 +65,9 @@ async def segment_from_text(
         source_type=SuggestionSourceType.SAM_TEXT,
         suggestions=suggestions,
         count=len(suggestions),
-        config=ModelConfig(...)
+        config=ModelConfig(
+            model=session.model_name,
+            device=session.model_device,
+            precision=session.model_precision    
+        ),
     )

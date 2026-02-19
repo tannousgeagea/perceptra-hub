@@ -4,7 +4,7 @@ from uuid import UUID
 import uuid as uuid_lib
 from typing import Optional
 from redis import Redis
-
+import logging
 from api.dependencies import get_project_context, ProjectContext
 from api.routers.suggestions.schemas import *
 from api.routers.suggestions.services import SuggestionService
@@ -51,7 +51,8 @@ async def segment_from_points(
     )
     
     suggestion = Suggestion(
-        id=str(uuid_lib.uuid4()),
+        id=session.pk,
+        suggestion_id=str(uuid_lib.uuid4()),
         bbox=BoundingBox(x=output.bbox[0], y=output.bbox[1], 
                          width=output.bbox[2], height=output.bbox[3]),
         mask_rle=output.mask_rle,
@@ -60,7 +61,7 @@ async def segment_from_points(
         type="point",
         status="pending",
     )
-    
+        
     await sug_svc.store_suggestions(request.session_id, [suggestion])
     await sug_svc.update_session_source_type(request.session_id, SuggestionSourceType.SAM_POINT)
     
@@ -69,6 +70,10 @@ async def segment_from_points(
         status="ready",
         source_type=SuggestionSourceType.SAM_POINT,
         suggestions=[suggestion],
-        config=ModelConfig(...),
+        config=ModelConfig(
+            model=session.model_name,
+            device=session.model_device,
+            precision=session.model_precision    
+        ),
         count=len([suggestion])
     )

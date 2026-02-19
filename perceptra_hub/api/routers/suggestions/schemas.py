@@ -26,7 +26,8 @@ class PointPrompt(BaseModel):
     label: int = Field(1, description="1=foreground, 0=background")
 
 class Suggestion(BaseModel):
-    id: str = Field(alias="suggestion_id")  # Frontend uses 'id'
+    id: Optional[int] = Field(default=1)  # Frontend uses 'id'
+    suggestion_id: str = Field()
     # suggestion_id: str
     bbox: BoundingBox
     mask_rle: Optional[dict] = None

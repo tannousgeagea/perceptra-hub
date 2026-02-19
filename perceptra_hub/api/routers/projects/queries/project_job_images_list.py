@@ -14,6 +14,7 @@ from api.routers.projects.schemas import JobImagesResponce
 from api.dependencies import get_project_context, ProjectContext
 from jobs.models import Job, JobImage
 from images.models import Image
+from common_utils.image.utils import parse_project_image_query, apply_job_image_filters
 
 from django.contrib.auth import get_user_model
 
@@ -39,13 +40,41 @@ async def list_job_images(
     project_ctx: ProjectContext = Depends(get_project_context),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    status: Optional[str] = Query(None),
-    annotated: Optional[bool] = Query(None)
+    status: Optional[str] = Query(None, deprecated=True),
+    annotated: Optional[bool] = Query(None, deprecated=True),
+    q: Optional[str] = Query(
+        None,
+        description="Search query (e.g., 'status:annotated tag:car min-width:1920')",
+        alias="q"
+    ),
 ):
-    """List images assigned to a job."""
+    """List images assigned to a job.
+    
+    **Query Syntax:**
+    - `status:annotated|unannotated|reviewed` - Filter by status
+    - `annotated:true|false` - Filter by annotated flag
+    - `reviewed:true|false` - Filter by reviewed flag
+    - `marked-null:true|false` - Filter null images
+    - `job-status:assigned|waiting|excluded` - Filter by job assignment
+    - `tag:name` - Filter by image tag
+    - `filename:text` - Filter by filename
+    - `min-width:1920` - Minimum width
+    - `max-width:1920` - Maximum width
+    - `min-height:1080` - Minimum height
+    - `max-height:1080` - Maximum height
+    - `min-annotations:5` - Minimum annotation count
+    - `max-annotations:10` - Maximum annotation count
+    - `sort:size|name|date|width|height|annotations|priority` - Sort results
+    
+    **Examples:**
+    - `status:annotated tag:car min-width:1920`
+    - `reviewed:true sort:priority`
+    - `min-annotations:5 status:annotated`
+    """
+
     
     @sync_to_async
-    def get_job_images(project, job_id, skip, limit, status_filter, annotated):
+    def get_job_images(project, job_id, skip, limit, status_filter, annotated, query):
         # Verify job belongs to project
         try:
             job = Job.objects.get(id=job_id, project=project)
@@ -65,12 +94,17 @@ async def list_job_images(
         reviewed_count = queryset.filter(project_image__status='reviewed').count()
         unannotated_count = queryset.filter(project_image__status='unannotated').count()
         
-        # Apply filters on project_image
-        if status_filter:
-            queryset = queryset.filter(project_image__status=status_filter)
+        if query:
+            filters = parse_project_image_query(query)
+            queryset = apply_job_image_filters(queryset, filters)
         
-        if annotated is not None:
-            queryset = queryset.filter(project_image__annotated=annotated)
+        else:
+            # Apply filters on project_image
+            if status_filter:
+                queryset = queryset.filter(project_image__status=status_filter)
+            
+            if annotated is not None:
+                queryset = queryset.filter(project_image__annotated=annotated)
         
         total = queryset.count()
         
@@ -157,5 +191,5 @@ async def list_job_images(
         }
     
     return await get_job_images(
-        project_ctx.project, job_id, skip, limit, status, annotated
+        project_ctx.project, job_id, skip, limit, status, annotated, query=q,
     )

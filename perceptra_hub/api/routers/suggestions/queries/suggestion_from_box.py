@@ -44,7 +44,7 @@ async def segment_from_box(
     )
     
     suggestion = Suggestion(
-        id=str(uuid_lib.uuid4()),
+        suggestion_id=str(uuid_lib.uuid4()),
         bbox=BoundingBox(x=output.bbox[0], y=output.bbox[1],
                          width=output.bbox[2], height=output.bbox[3]),
         mask_rle=output.mask_rle,
@@ -59,7 +59,11 @@ async def segment_from_box(
     return SuggestionSessionResponse(
         session_id=request.session_id,
         status="ready",
-        config=ModelConfig(...),
+        config=ModelConfig(
+            model=session.model_name,
+            device=session.model_device,
+            precision=session.model_precision    
+        ),
         source_type=SuggestionSourceType.SAM_BOX,
         suggestions=[suggestion],
         count=len([suggestion]) 
