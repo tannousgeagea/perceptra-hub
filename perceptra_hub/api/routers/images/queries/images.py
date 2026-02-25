@@ -1,7 +1,7 @@
 """
 FastAPI routes for image management and upload.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, Body
 from fastapi.responses import StreamingResponse
 from typing import Optional, List
 from uuid import UUID
@@ -17,7 +17,7 @@ import django
 django.setup()
 
 from django.db import models
-
+from pydantic import BaseModel
 from api.dependencies import RequestContext, get_request_context
 from storage.models import StorageProfile
 from storage.services import get_storage_adapter_for_profile, get_default_storage_adapter
@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/images")
 
+
+class BulkDeleteImagesRequest(BaseModel):
+    image_ids: List[UUID]
 
 # ============= Helper Functions =============
 
@@ -613,7 +616,7 @@ async def get_image(
             'uploaded_by',
             'project'
         ).prefetch_related('tags').get(
-            id=image_id,
+            image_id=image_id,
             organization=ctx.organization
         )
         
@@ -672,7 +675,7 @@ async def download_image(
     
     try:
         image = Image.objects.get(
-            id=image_id,
+            image_id=image_id,
             organization=ctx.organization
         )
         
@@ -715,7 +718,7 @@ async def delete_image(
     
     try:
         image = Image.objects.get(
-            id=image_id,
+            image_id=image_id,
             organization=ctx.organization
         )
         
@@ -737,6 +740,90 @@ async def delete_image(
             detail=f"Image {image_id} not found"
         )
 
+# ============= Bulk Delete Images =============
+@router.delete(
+    "",
+    status_code=status.HTTP_200_OK,
+    summary="Bulk Delete Images",
+    description="Delete multiple images from storage and database"
+)
+async def bulk_delete_images(
+    payload: BulkDeleteImagesRequest,
+    ctx: RequestContext = Depends(get_request_context)
+):
+    """
+    Bulk delete images from storage and database.
+    """
+
+    ctx.require_role("admin", "owner")
+    
+    image_ids = payload.image_ids
+    
+    @sync_to_async
+    def bulk_delete(image_ids, ctx):
+        from django.db import transaction
+
+        if not image_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No image IDs provided"
+            )
+
+        with transaction.atomic():
+
+            images = list(
+                Image.objects.select_for_update().filter(
+                    image_id__in=image_ids,
+                    organization=ctx.organization
+                )
+            )
+
+            if not images:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="No matching images found"
+                )
+
+            # Collect storage keys BEFORE delete
+            storage_items = [
+                (img.storage_key, img)
+                for img in images
+                if img.storage_key
+            ]
+
+            deleted_count = len(images)
+
+            # 🔥 Delete DB records (triggers post_delete)
+            Image.objects.filter(
+                image_id__in=[img.image_id for img in images],
+                organization=ctx.organization
+            ).delete()
+
+        # 🚀 After DB commit → delete storage
+        storage_deleted = 0
+        storage_failed = 0
+
+        for storage_key, img in storage_items:
+            try:
+                img.delete_from_storage()
+                logger.info(f"Deleted file from storage: {storage_key}")
+                storage_deleted += 1
+            except Exception as e:
+                logger.error(
+                    f"Failed to delete file from storage ({storage_key}): {e}"
+                )
+                storage_failed += 1
+
+        return {
+            "message": "Bulk image deletion completed",
+            "total_requested": len(image_ids),
+            "deleted_from_db": deleted_count,
+            "storage_deleted": storage_deleted,
+            "storage_failed": storage_failed,
+        }
+
+    return await bulk_delete(image_ids, ctx)
+
 
 # ============= Image Tagging Endpoints =============
 
@@ -755,7 +842,7 @@ async def add_tags_to_image(
     
     try:
         image = Image.objects.get(
-            id=image_id,
+            image_id=image_id,
             organization=ctx.organization
         )
         
@@ -789,6 +876,109 @@ async def add_tags_to_image(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Image {image_id} not found"
         )
+        
+# ============= Bulk Add Tags to Images =============
+@router.post(
+    "/bulk-tags",
+    status_code=status.HTTP_201_CREATED,
+    summary="Bulk Add Tags to Images",
+    description="Add one or more tags to multiple images"
+)
+async def bulk_add_tags_to_images(
+    image_ids: List[UUID] = Body(..., description="List of image IDs"),
+    tag_names: List[str] = Body(..., description="List of tag names"),
+    ctx: RequestContext = Depends(get_request_context)
+):
+    @sync_to_async
+    def bulk_add_tags(image_ids, tag_names, ctx):
+        from django.db import transaction
+
+        if not image_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No image IDs provided"
+            )
+
+        if not tag_names:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No tag names provided"
+            )
+
+        with transaction.atomic():
+
+            # 🔎 Fetch images
+            images = list(
+                Image.objects.filter(
+                    image_id__in=image_ids,
+                    organization=ctx.organization
+                )
+            )
+
+            if not images:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="No matching images found"
+                )
+
+            # 🧼 Normalize tag names
+            cleaned_tag_names = list(
+                {name.strip() for name in tag_names if name.strip()}
+            )
+
+            # 🔥 Create missing tags in bulk
+            existing_tags = {
+                tag.name: tag
+                for tag in Tag.objects.filter(
+                    organization=ctx.organization,
+                    name__in=cleaned_tag_names
+                )
+            }
+
+            new_tags = [
+                Tag(organization=ctx.organization, name=name)
+                for name in cleaned_tag_names
+                if name not in existing_tags
+            ]
+
+            if new_tags:
+                Tag.objects.bulk_create(new_tags, ignore_conflicts=True)
+
+            # 🔄 Re-fetch all tags (ensures we have DB instances)
+            all_tags = Tag.objects.filter(
+                organization=ctx.organization,
+                name__in=cleaned_tag_names
+            )
+
+            tag_map = {tag.name: tag for tag in all_tags}
+
+            # 🔥 Prepare ImageTag relations
+            image_tag_relations = []
+
+            for image in images:
+                for tag in all_tags:
+                    image_tag_relations.append(
+                        ImageTag(
+                            image=image,
+                            tag=tag,
+                            tagged_by=ctx.user
+                        )
+                    )
+
+            # 🚀 Bulk create relations (ignore duplicates)
+            created_relations = ImageTag.objects.bulk_create(
+                image_tag_relations,
+                ignore_conflicts=True
+            )
+
+            return {
+                "message": "Bulk tagging completed",
+                "total_images": len(images),
+                "total_tags_requested": len(cleaned_tag_names),
+                "relations_created": len(created_relations)
+            }
+
+    return await bulk_add_tags(image_ids, tag_names, ctx)
 
 
 @router.delete(
@@ -806,7 +996,7 @@ async def remove_tag_from_image(
     
     try:
         image = Image.objects.get(
-            id=image_id,
+            image_id=image_id,
             organization=ctx.organization
         )
         
@@ -854,7 +1044,7 @@ async def associate_image_with_project(
     
     try:
         image = Image.objects.get(
-            id=image_id,
+            image_id=image_id,
             organization=ctx.organization
         )
         
@@ -912,7 +1102,7 @@ async def disassociate_image_from_project(
     
     try:
         image = Image.objects.get(
-            id=image_id,
+            image_id=image_id,
             organization=ctx.organization
         )
         
