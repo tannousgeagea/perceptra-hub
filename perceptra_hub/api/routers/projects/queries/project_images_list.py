@@ -18,6 +18,7 @@ from projects.models import (
 from common_utils.image.utils import parse_project_image_query, apply_project_image_filters
 from api.routers.projects.schemas import ProjectImagesResponse
 from images.models import Image
+from django.db.models import Count, Q
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -95,11 +96,14 @@ async def list_project_images(
         
             queryset = queryset.order_by('-priority', '-added_at')
             
-        annotated_count = queryset.filter(status='annotated').count()
-        reviewed_count = queryset.filter(status='reviewed').count()
-        unannotated_count = queryset.filter(status='unannotated').count()
-        
-        
+
+        counts = queryset.aggregate(
+            annotated_count=Count('id', filter=Q(status='annotated')),
+            reviewed_count=Count('id', filter=Q(status='reviewed')),
+            unannotated_count=Count('id', filter=Q(status='unannotated')),
+        )
+
+        image_ids = list(queryset.values_list('id', flat=True))
         total = queryset.distinct().count()
         
         # Get paginated results
@@ -118,9 +122,10 @@ async def list_project_images(
         
         return {
             "total": total,
-            "annotated": annotated_count,
-            "unannotated": unannotated_count,
-            "reviewed": reviewed_count,
+            "image_ids": image_ids,
+            "annotated": counts["annotated_count"],
+            "unannotated": counts["unannotated_count"],
+            "reviewed": counts["reviewed_count"],
             "images": [
                 {
                     "id": str(pi.id),

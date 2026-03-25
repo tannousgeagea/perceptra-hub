@@ -209,6 +209,7 @@ class ProjectImagesResponse(BaseModel):
     annotated: int
     unannotated: int
     reviewed: int
+    image_ids: Optional[List] = None
     images:List[ProjectImage]
     
 class JobImagesResponce(ProjectImagesResponse):
