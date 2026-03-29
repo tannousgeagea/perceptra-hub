@@ -29,13 +29,6 @@ services:
       - rabbitmq
       - postgres
       - redis
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
 
   nginx:
     image: nginx:latest
