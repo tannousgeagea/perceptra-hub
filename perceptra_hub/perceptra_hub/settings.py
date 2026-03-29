@@ -206,6 +206,12 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# API Key Configuration
+API_KEY_HMAC_SECRET = os.environ.get('API_KEY_HMAC_SECRET', SECRET_KEY)
+API_KEY_PREFIX = os.environ.get('API_KEY_PREFIX', 'ph')
+API_KEY_DEFAULT_EXPIRY_DAYS = int(os.environ.get('API_KEY_DEFAULT_EXPIRY_DAYS', 90))
+API_KEY_MAX_EXPIRY_DAYS = int(os.environ.get('API_KEY_MAX_EXPIRY_DAYS', 365))
+
 UNFOLD = {
     "SITE_HEADER": _("PercetraHub"),
     "SITE_TITLE": _("Perception Hub"),

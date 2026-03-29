@@ -2,7 +2,7 @@
 FastAPI dependencies for authentication, database, and organization management.
 """
 from fastapi import Depends, HTTPException, status, Header, Request
-from typing import Optional, Generator, Tuple, List
+from typing import Optional, Generator, Tuple, List, Annotated
 import logging
 import jwt
 from uuid import UUID
@@ -479,22 +479,38 @@ async def bypass_auth_dev(request: Request) -> tuple[User, Organization]:
 # ============= Context Classes for Better Type Hints =============
 
 class RequestContext:
-    """Request context with user and organization."""
-    
+    """
+    Request context with user, organization, role, and optional API key.
+
+    Works with both JWT and API key authentication. The `role` is always
+    a Role model instance so existing has_role()/require_role() calls
+    continue to work unchanged.
+    """
+
     def __init__(
         self,
-        user: User,
+        user,
         organization: Organization,
-        role: Optional[Role] = None
+        role: Optional[Role] = None,
+        membership: Optional[OrganizationMembership] = None,
+        api_key: Optional[APIKey] = None,
+        auth_method: str = 'jwt',
     ):
         self.user = user
         self.organization = organization
         self.role = role
-    
+        self.membership = membership
+        self.api_key = api_key
+        self.auth_method = auth_method
+
+    @property
+    def is_api_key_auth(self) -> bool:
+        return self.auth_method == 'api_key'
+
     def has_role(self, *role_names: str) -> bool:
         """Check if user has any of the specified roles."""
-        return self.role and self.role.name in role_names
-    
+        return self.role is not None and self.role.name in role_names
+
     def require_role(self, *role_names: str):
         """Raise exception if user doesn't have required role."""
         if not self.has_role(*role_names):
@@ -504,21 +520,80 @@ class RequestContext:
             )
 
 
+@sync_to_async
+def _fetch_organization_membership(user, organization) -> OrganizationMembership:
+    """Fetch user's active membership in organization."""
+    try:
+        return OrganizationMembership.objects.select_related('role').get(
+            user=user,
+            organization=organization,
+        )
+    except OrganizationMembership.DoesNotExist:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User is not a member of organization '{organization.name}'"
+        )
+
+
 async def get_request_context(
-    user: User = Depends(get_current_user),
-    organization: Organization = Depends(get_current_organization),
-    role: Role = Depends(get_user_organization_role)
+    request: Request,
+    authorization: Annotated[Optional[str], Header()] = None,
+    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+    x_organization_id: Annotated[Optional[str], Header(alias="X-Organization-ID")] = None,
+    x_organization_slug: Annotated[Optional[str], Header(alias="X-Organization-Slug")] = None,
 ) -> RequestContext:
     """
     Get complete request context with user, organization, and role.
-    
+
+    Supports dual authentication:
+      - **API Key** (X-API-Key header) — organization is implicit from the key.
+      - **JWT** (Authorization: Bearer) — organization via X-Organization-ID/Slug header.
+
+    API Key takes priority if both are provided.
+
     Usage:
         @router.get("/profiles")
         async def list_profiles(ctx: RequestContext = Depends(get_request_context)):
             # ctx.user, ctx.organization, ctx.role are all available
+            # ctx.is_api_key_auth, ctx.api_key for API key specific logic
             ...
     """
-    return RequestContext(user, organization, role)
+    # ── API Key authentication (priority) ──
+    if x_api_key:
+        from api_keys.auth import authenticate_with_api_key
+        return await authenticate_with_api_key(request, x_api_key)
+
+    # ── JWT authentication ──
+    if authorization:
+        user = await get_current_user(authorization)
+
+        # Resolve organization from headers or query params
+        org_id = x_organization_id or request.query_params.get('organization_id')
+        org_slug = x_organization_slug or request.query_params.get('organization_slug')
+
+        if not org_id and not org_slug:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Organization ID or slug required. Provide via X-Organization-ID header, X-Organization-Slug header, or query parameter"
+            )
+
+        organization = await fetch_organization_and_verify_membership(user, org_id, org_slug)
+        membership = await _fetch_organization_membership(user, organization)
+
+        return RequestContext(
+            user=user,
+            organization=organization,
+            role=membership.role,
+            membership=membership,
+            auth_method='jwt',
+        )
+
+    # ── No authentication ──
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required. Provide X-API-Key or Authorization header.",
+        headers={"WWW-Authenticate": "ApiKey, Bearer"},
+    )
 
 
 # ============= Project Context =============
@@ -693,395 +768,77 @@ async def get_project_context(
         project_role=project_role
     )
 
-# ============= API Key Authentication =============
+# ============= Permission & Scope Dependencies =============
 
-@sync_to_async
-def fetch_user_and_org_from_api_key(api_key: str) -> Tuple[User, Organization, 'APIKey']:
+def require_permission(permission: str):
     """
-    Fetch user, organization, and API key object from API key.
-    Validates key and updates usage tracking.
-    """
-    from api_keys.models import APIKey
-    
-    # Hash the incoming key for comparison
-    hashed_key = APIKey.hash_key(api_key)
-    
-    try:
-        key_obj = APIKey.objects.select_related(
-            'organization', 'user', 'created_by'
-        ).get(hashed_key=hashed_key)
-    except APIKey.DoesNotExist:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key"
-        )
-    
-    # Validate key
-    if not key_obj.is_valid():
-        detail = "API key is inactive"
-        if key_obj.expires_at and key_obj.expires_at < timezone.now():
-            detail = f"API key expired on {key_obj.expires_at.strftime('%Y-%m-%d')}"
-        
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=detail
-        )
-    
-    # Increment usage (async, non-blocking)
-    key_obj.increment_usage()
-    
-    # Determine user based on scope
-    # For org-wide keys, use created_by as the acting user
-    # For user-specific keys, use the specified user
-    user = key_obj.user if key_obj.scope == 'user' else key_obj.created_by
-    
-    if not user or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Associated user is inactive"
-        )
-    
-    return user, key_obj.organization, key_obj
+    Dependency factory to require a specific permission level.
+    Works with both JWT (role-based) and API Key (permission-based) auth.
 
-
-async def get_user_from_api_key(
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key")
-) -> Tuple[User, Organization, 'APIKey']:
-    """
-    Authenticate using API key.
-    Returns (user, organization, api_key_obj) tuple.
-    
-    Usage:
-        @router.get("/endpoint")
-        async def endpoint(auth = Depends(get_user_from_api_key)):
-            user, organization, api_key = auth
-    """
-    if not x_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing X-API-Key header",
-            headers={"WWW-Authenticate": "ApiKey"}
-        )
-    
-    return await fetch_user_and_org_from_api_key(x_api_key)
-
-
-# ============= Flexible Authentication (JWT or API Key) =============
-
-async def get_current_user_flexible(
-    request: Request,
-    authorization: Optional[str] = Header(None, alias="Authorization"),
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key")
-) -> Tuple[User, Organization, Optional['APIKey']]:
-    """
-    Support both JWT and API Key authentication.
-    Priority: API Key > JWT
-    
-    Returns: (user, organization, api_key_obj_or_none)
-    
-    Usage:
-        @router.get("/endpoint")
-        async def endpoint(auth = Depends(get_current_user_flexible)):
-            user, organization, api_key = auth
-            # api_key is None if JWT auth was used
-    """
-    # Try API key first
-    if x_api_key:
-        user, org, api_key = await get_user_from_api_key(x_api_key)
-        return user, org, api_key
-    
-    # Fall back to JWT
-    if authorization:
-        user = await get_current_user(authorization)
-        organization = await get_current_organization(request, user)
-        return user, organization, None
-    
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required. Provide X-API-Key or Authorization header",
-        headers={"WWW-Authenticate": "ApiKey, Bearer"}
-    )
-
-
-# ============= Permission Checking =============
-
-def require_api_key_permission(required_permission: str):
-    """
-    Dependency factory to require specific API key permission.
-    
     Usage:
         @router.post("/endpoint")
-        async def endpoint(
-            auth = Depends(require_api_key_permission("write"))
-        ):
-            user, organization, api_key = auth
-    
-    Args:
-        required_permission: 'read', 'write', or 'admin'
+        async def endpoint(ctx = Depends(require_permission("write"))):
+            ...
     """
-    async def permission_checker(
-        auth: Tuple[User, Organization, Optional['APIKey']] = Depends(get_current_user_flexible)
-    ) -> Tuple[User, Organization, Optional['APIKey']]:
-        user, organization, api_key = auth
-        
-        # If JWT auth (no API key), allow all operations
-        # (JWT users have their own permission system via roles)
-        if api_key is None:
-            return auth
-        
-        # Check API key permission
-        if not api_key.has_permission(required_permission):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"API key requires '{required_permission}' permission. Current: '{api_key.permission}'"
-            )
-        
-        return auth
-    
-    return permission_checker
+    async def _check_permission(ctx: RequestContext = Depends(get_request_context)):
+        if ctx.api_key:
+            from api_keys.auth import APIKeyAuth
+            APIKeyAuth.check_permission(ctx.api_key, permission)
+        else:
+            role_permission_map = {
+                'read': ['admin', 'owner', 'editor', 'viewer'],
+                'write': ['admin', 'owner', 'editor'],
+                'admin': ['admin', 'owner'],
+            }
+            allowed_roles = role_permission_map.get(permission, [])
+            if not ctx.role or ctx.role.name not in allowed_roles:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Requires '{permission}' permission"
+                )
+        return ctx
+
+    return _check_permission
 
 
-# ============= Rate Limiting =============
-
-@sync_to_async
-def check_rate_limit(api_key: 'APIKey') -> bool:
+def require_scope(scope: str):
     """
-    Check if API key has exceeded rate limits.
-    Returns True if within limits, raises HTTPException if exceeded.
-    """
-    from api_keys.models import APIKeyRateLimit
-    from django.db.models import Sum
-    
-    now = timezone.now()
-    
-    # Check per-minute limit
-    if api_key.rate_limit_per_minute > 0:
-        minute_start = now.replace(second=0, microsecond=0)
-        
-        minute_limit, created = APIKeyRateLimit.objects.get_or_create(
-            api_key=api_key,
-            window_type='minute',
-            window_start=minute_start,
-            defaults={'request_count': 0}
-        )
-        
-        if minute_limit.request_count >= api_key.rate_limit_per_minute:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Rate limit exceeded: {api_key.rate_limit_per_minute} requests per minute",
-                headers={
-                    "X-RateLimit-Limit": str(api_key.rate_limit_per_minute),
-                    "X-RateLimit-Remaining": "0",
-                    "X-RateLimit-Reset": str(int((minute_start + timedelta(minutes=1)).timestamp()))
-                }
-            )
-        
-        # Increment counter
-        APIKeyRateLimit.objects.filter(pk=minute_limit.pk).update(
-            request_count=minute_limit.request_count + 1
-        )
-    
-    # Check per-hour limit
-    if api_key.rate_limit_per_hour > 0:
-        hour_start = now.replace(minute=0, second=0, microsecond=0)
-        
-        hour_limit, created = APIKeyRateLimit.objects.get_or_create(
-            api_key=api_key,
-            window_type='hour',
-            window_start=hour_start,
-            defaults={'request_count': 0}
-        )
-        
-        if hour_limit.request_count >= api_key.rate_limit_per_hour:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Rate limit exceeded: {api_key.rate_limit_per_hour} requests per hour",
-                headers={
-                    "X-RateLimit-Limit": str(api_key.rate_limit_per_hour),
-                    "X-RateLimit-Remaining": "0",
-                    "X-RateLimit-Reset": str(int((hour_start + timedelta(hours=1)).timestamp()))
-                }
-            )
-        
-        # Increment counter
-        APIKeyRateLimit.objects.filter(pk=hour_limit.pk).update(
-            request_count=hour_limit.request_count + 1
-        )
-    
-    return True
+    Dependency factory to require a specific API key scope.
+    Only enforced for API key auth; JWT auth bypasses scopes.
 
-
-async def check_api_key_rate_limit(
-    auth: Tuple[User, Organization, Optional['APIKey']] = Depends(get_current_user_flexible)
-) -> Tuple[User, Organization, Optional['APIKey']]:
-    """
-    Rate limiting dependency for API keys.
-    JWT authentication bypasses rate limiting.
-    
     Usage:
         @router.get("/endpoint")
-        async def endpoint(
-            auth = Depends(check_api_key_rate_limit)
-        ):
-            user, organization, api_key = auth
+        async def endpoint(ctx = Depends(require_scope("projects:read"))):
+            ...
     """
-    user, organization, api_key = auth
-    
-    # Only check rate limits for API key auth
-    if api_key is not None:
-        await check_rate_limit(api_key)
-    
-    return auth
+    async def _check_scope(ctx: RequestContext = Depends(get_request_context)):
+        if ctx.api_key:
+            from api_keys.auth import APIKeyAuth
+            APIKeyAuth.check_scope(ctx.api_key, scope)
+        return ctx
+
+    return _check_scope
 
 
-# ============= Combined Dependency =============
-
-def require_api_key_with_rate_limit(required_permission: str = "read"):
-    """
-    Combined dependency: authentication + permission + rate limiting.
-    
-    Usage:
-        @router.post("/endpoint")
-        async def endpoint(
-            auth = Depends(require_api_key_with_rate_limit("write"))
-        ):
-            user, organization, api_key = auth
-    """
-    async def combined_checker(
-        auth = Depends(require_api_key_permission(required_permission))
-    ):
-        # Rate limit check
-        return await check_api_key_rate_limit(auth)
-    
-    return combined_checker
-
-
-# ============= Usage Logging =============
-
-@sync_to_async
-def log_api_key_usage(
-    api_key: 'APIKey',
-    request: Request,
-    endpoint: str,
-    method: str,
-    status_code: int,
-    response_time_ms: int = None
-):
-    """
-    Log API key usage for analytics.
-    Call this in middleware or after request completion.
-    """
-    from api_keys.models import APIKeyUsageLog
-    
-    # Get client IP
-    ip_address = request.client.host if request.client else None
-    
-    # Get user agent
-    user_agent = request.headers.get('user-agent')
-    
-    APIKeyUsageLog.objects.create(
-        api_key=api_key,
-        endpoint=endpoint,
-        method=method,
-        status_code=status_code,
-        response_time_ms=response_time_ms,
-        ip_address=ip_address,
-        user_agent=user_agent
-    )
-
-
-# ============= Example Usage in Routes =============
-
-"""
-Example 1: Simple API key auth
-@router.get("/projects")
-async def list_projects(
-    auth = Depends(get_user_from_api_key)
-):
-    user, organization, api_key = auth
-    # ... logic
-
-Example 2: Require write permission
-@router.post("/projects")
-async def create_project(
-    auth = Depends(require_api_key_permission("write"))
-):
-    user, organization, api_key = auth
-    # ... logic
-
-Example 3: With rate limiting
-@router.get("/projects")
-async def list_projects(
-    auth = Depends(check_api_key_rate_limit)
-):
-    user, organization, api_key = auth
-    # ... logic
-
-Example 4: Combined (recommended for production)
-@router.post("/projects")
-async def create_project(
-    auth = Depends(require_api_key_with_rate_limit("write"))
-):
-    user, organization, api_key = auth
-    # ... logic
-
-Example 5: Flexible (supports both JWT and API key)
-@router.get("/projects")
-async def list_projects(
-    auth = Depends(get_current_user_flexible)
-):
-    user, organization, api_key = auth
-    # api_key is None if JWT was used
-    if api_key:
-        logger.info(f"API key access: {api_key.name}")
-    # ... logic
-"""
-    
-
-# ============= Usage Examples in Docstring =============
+# ============= Usage Examples =============
 
 """
 Usage Examples:
 
-1. Basic authenticated endpoint:
+1. Basic context (supports both JWT and API key automatically):
     @router.get("/profiles")
-    async def list_profiles(
-        user: User = Depends(get_current_user),
-        organization: Organization = Depends(get_current_organization)
-    ):
-        # User and organization automatically injected
-        profiles = StorageProfile.objects.filter(tenant=organization)
-        return profiles
+    async def list_profiles(ctx: RequestContext = Depends(get_request_context)):
+        ctx.require_role('admin', 'owner')
+        # ctx.user, ctx.organization, ctx.role available
+        # ctx.is_api_key_auth, ctx.api_key for API key specific logic
 
-2. Require specific role:
+2. Require write permission (works with both JWT roles and API key permissions):
     @router.post("/profiles")
-    async def create_profile(
-        profile_data: dict,
-        deps = Depends(require_organization_admin())
-    ):
-        user, organization, role = deps
-        # Only admins/owners can access
+    async def create_profile(ctx = Depends(require_permission("write"))):
         ...
 
-3. Using RequestContext:
-    @router.get("/profiles")
-    async def list_profiles(
-        ctx: RequestContext = Depends(get_request_context)
-    ):
-        # Check role inline
-        if ctx.has_role('admin', 'owner'):
-            # Show all profiles
-            ...
-        else:
-            # Show limited profiles
-            ...
-
-4. Development bypass (REMOVE IN PRODUCTION):
-    @router.get("/dev-test")
-    async def dev_test(
-        deps = Depends(bypass_auth_dev)
-    ):
-        user, organization = deps
-        # No auth required in development
+3. Require specific scope (API key only, JWT bypasses):
+    @router.get("/projects")
+    async def list_projects(ctx = Depends(require_scope("projects:read"))):
         ...
 """

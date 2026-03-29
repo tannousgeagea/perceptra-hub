@@ -208,3 +208,6 @@ __marimo__/
 
 # celery beat
 celerybeat-schedule.db
+
+
+*.md

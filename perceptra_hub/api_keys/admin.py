@@ -14,81 +14,85 @@ class APIKeyAdmin(ModelAdmin):
         'name',
         'organization',
         'scope',
-        'permission',
+        'permissions',
         'is_active_badge',
         'usage_count',
         'last_used_at',
-        'expires_at'
+        'expires_at',
     ]
-    
+
     list_filter = [
         'scope',
-        'permission',
+        'permissions',
         'is_active',
         'created_at',
-        'expires_at'
+        'expires_at',
     ]
-    
+
     search_fields = [
         'name',
-        'prefix',
+        'key_prefix',
         'organization__name',
-        'user__username',
-        'created_by__username'
+        'owned_by__username',
+        'created_by__username',
     ]
-    
+
     readonly_fields = [
-        'key',
-        'prefix',
+        'api_key_id',
+        'key_prefix',
         'hashed_key',
         'usage_count',
         'last_used_at',
         'created_at',
-        'created_by'
+        'created_by',
+        'version',
+        'rotated_from',
     ]
-    
+
     fieldsets = [
         ('Key Information', {
-            'fields': ('prefix', 'name', 'description', 'hashed_key')
+            'fields': ('api_key_id', 'key_prefix', 'name', 'description', 'hashed_key'),
         }),
         ('Ownership', {
-            'fields': ('organization', 'scope', 'user', 'created_by')
+            'fields': ('organization', 'scope', 'owned_by', 'created_by'),
         }),
-        ('Permissions', {
-            'fields': ('permission', 'is_active')
+        ('Permissions & Scopes', {
+            'fields': ('permissions', 'scopes', 'allowed_ips', 'is_active'),
         }),
         ('Rate Limiting', {
-            'fields': ('rate_limit_per_minute', 'rate_limit_per_hour')
+            'fields': ('rate_limit_per_minute', 'rate_limit_per_hour'),
         }),
         ('Usage', {
-            'fields': ('usage_count', 'last_used_at', 'created_at', 'expires_at')
+            'fields': ('usage_count', 'last_used_at', 'created_at', 'expires_at'),
+        }),
+        ('Rotation', {
+            'fields': ('version', 'rotated_from'),
+            'classes': ('collapse',),
         }),
     ]
-    
+
     def display_prefix(self, obj):
-        return f"{obj.prefix}..."
+        return f"{obj.key_prefix}..."
     display_prefix.short_description = "Key Prefix"
-    
+
     def is_active_badge(self, obj):
         if obj.is_active:
             color = 'green'
-            text = '✓ Active'
+            text = 'Active'
         else:
             color = 'red'
-            text = '✗ Inactive'
+            text = 'Inactive'
         return format_html(
             '<span style="color: {};">{}</span>',
             color,
-            text
+            text,
         )
     is_active_badge.short_description = "Status"
-    
+
     def has_add_permission(self, request):
-        # Keys should be created via API only
         return False
-    
+
     def has_delete_permission(self, request, obj=None):
-        # Allow deletion in admin
         return True
 
 
@@ -101,21 +105,21 @@ class APIKeyUsageLogAdmin(ModelAdmin):
         'endpoint',
         'status_code_badge',
         'response_time_ms',
-        'ip_address'
+        'ip_address',
     ]
-    
+
     list_filter = [
         'method',
         'status_code',
-        'timestamp'
+        'timestamp',
     ]
-    
+
     search_fields = [
-        'api_key__prefix',
+        'api_key__key_prefix',
         'endpoint',
-        'ip_address'
+        'ip_address',
     ]
-    
+
     readonly_fields = [
         'api_key',
         'timestamp',
@@ -124,13 +128,13 @@ class APIKeyUsageLogAdmin(ModelAdmin):
         'status_code',
         'response_time_ms',
         'ip_address',
-        'user_agent'
+        'user_agent',
     ]
-    
+
     def api_key_prefix(self, obj):
-        return f"{obj.api_key.prefix}..."
+        return f"{obj.api_key.key_prefix}..."
     api_key_prefix.short_description = "API Key"
-    
+
     def status_code_badge(self, obj):
         if 200 <= obj.status_code < 300:
             color = 'green'
@@ -138,20 +142,18 @@ class APIKeyUsageLogAdmin(ModelAdmin):
             color = 'orange'
         else:
             color = 'red'
-        
+
         return format_html(
             '<span style="color: {}; font-weight: bold;">{}</span>',
             color,
-            obj.status_code
+            obj.status_code,
         )
     status_code_badge.short_description = "Status"
-    
+
     def has_add_permission(self, request):
-        # Logs are created automatically
         return False
-    
+
     def has_change_permission(self, request, obj=None):
-        # Logs should not be modified
         return False
 
 
@@ -162,58 +164,58 @@ class APIKeyRateLimitAdmin(ModelAdmin):
         'window_type',
         'window_start',
         'request_count',
-        'limit_status'
+        'limit_status',
     ]
-    
+
     list_filter = [
         'window_type',
-        'window_start'
+        'window_start',
     ]
-    
+
     search_fields = [
-        'api_key__prefix'
+        'api_key__key_prefix',
     ]
-    
+
     readonly_fields = [
         'api_key',
         'window_start',
         'window_type',
-        'request_count'
+        'request_count',
     ]
-    
+
     def api_key_prefix(self, obj):
-        return f"{obj.api_key.prefix}..."
+        return f"{obj.api_key.key_prefix}..."
     api_key_prefix.short_description = "API Key"
-    
+
     def limit_status(self, obj):
         if obj.window_type == 'minute':
             limit = obj.api_key.rate_limit_per_minute
         else:
             limit = obj.api_key.rate_limit_per_hour
-        
+
         if limit == 0:
             return "Unlimited"
-        
+
         percentage = (obj.request_count / limit) * 100 if limit > 0 else 0
-        
+
         if percentage < 70:
             color = 'green'
         elif percentage < 90:
             color = 'orange'
         else:
             color = 'red'
-        
+
         return format_html(
             '<span style="color: {};">{}/{} ({}%)</span>',
             color,
             obj.request_count,
             limit,
-            round(percentage, 1)
+            round(percentage, 1),
         )
     limit_status.short_description = "Usage"
-    
+
     def has_add_permission(self, request):
         return False
-    
+
     def has_change_permission(self, request, obj=None):
         return False
