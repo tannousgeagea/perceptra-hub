@@ -210,4 +210,4 @@ __marimo__/
 celerybeat-schedule.db
 
 
-*.md
+CLAUDE.md
