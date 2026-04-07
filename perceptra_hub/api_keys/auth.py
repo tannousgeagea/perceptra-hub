@@ -272,7 +272,7 @@ async def authenticate_with_api_key(request: Request, x_api_key: str):
 
     Returns a RequestContext (imported late to avoid circular imports).
     """
-    from api.dependencies import RequestContext
+    from organizations.context import RequestContext
 
     if not x_api_key:
         raise HTTPException(
