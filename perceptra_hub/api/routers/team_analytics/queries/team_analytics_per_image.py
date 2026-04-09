@@ -448,9 +448,3 @@ async def get_user_image_performance(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching user performance: {str(e)}")
-
-# Health check endpoint
-@router.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy"}

@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from django.db.models import Q
-from api.dependencies import RequestContext, get_request_context
+from api.dependencies import RequestContext, get_request_context, require_permission
 from api.routers.billing.schemas import InvoiceOut, InvoiceGenerateRequest
 
 router = APIRouter(prefix="/billing")
@@ -27,7 +27,7 @@ router = APIRouter(prefix="/billing")
 async def generate_invoice(
     org_id: UUID,
     invoice_data: InvoiceGenerateRequest,
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     Generate an invoice from unbilled actions for a specific period.
@@ -53,7 +53,7 @@ async def generate_invoice(
         
         # Verify client organization
         try:
-            client_org = Organization.objects.get(id=data.client_organization_id)
+            client_org = Organization.objects.get(org_id=data.client_organization_id)
         except Organization.DoesNotExist:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
