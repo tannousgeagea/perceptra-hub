@@ -146,3 +146,77 @@ class InvoiceOut(BaseModel):
     notes: str
     created_at: datetime
     updated_at: datetime
+
+
+# ------------------------------------------------
+# Billing Action Enable
+# ------------------------------------------------
+
+class BackfillTaskResponse(BaseModel):
+    message: str
+    task_id: str
+    scope: str
+    user_id: Optional[UUID] = None
+    organization_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None
+
+
+class UserBillingSummary(BaseModel):
+    user_id: int
+    username: str
+    full_name: str
+    scope: str  # 'organization' or 'project'
+    scope_id: UUID  # org_id or project_id (both are UUIDs)
+    scope_name: str
+    
+    # Billing status
+    is_external_annotator: bool
+    billing_enabled: bool
+    hourly_rate: Optional[Decimal]
+    rate_card_id: Optional[UUID]
+    rate_card_name: Optional[str]
+    
+    # Financial summary
+    total_actions: int
+    total_amount: Decimal
+    total_billed: Decimal
+    total_unbilled: Decimal
+    avg_rate: Optional[Decimal]
+    
+    # Breakdown
+    action_breakdown: List[Dict[str, Any]]
+    
+    # Period
+    period_start: Optional[date]
+    period_end: Optional[date]
+
+
+class BillableActionDetail(BaseModel):
+    action_id: UUID
+    action_type: str
+    quantity: int
+    unit_rate: Decimal
+    total_amount: Decimal
+    is_billable: bool
+    billed_at: Optional[datetime]
+    invoice_number: Optional[str]
+    created_at: datetime
+    
+    # Context
+    project_id: Optional[UUID]
+    project_name: Optional[str]
+    metadata: Dict[str, Any]
+
+
+class ContractorListItem(BaseModel):
+    user_id: int
+    username: str
+    full_name: str
+    email: str
+    is_external_annotator: bool
+    billing_enabled: bool
+    contractor_company: Optional[str]
+    contract_start_date: Optional[date]
+    contract_end_date: Optional[date]
+    total_unbilled_amount: Decimal
+    total_actions_this_month: int

@@ -8,6 +8,7 @@ from annotations.models import Annotation
 from .models import ActivityEvent, ActivityEventType
 from api.tasks.activity import update_user_metrics_async
 from api.tasks.billing.billable_action import create_billable_action_from_event
+from memberships.models import OrganizationMembership, ProjectMembership
 import time
 
 
@@ -260,8 +261,39 @@ def track_image_project_removal(sender, instance, created, update_fields, **kwar
 def create_billing_record(sender, instance, created, **kwargs):
     """Trigger billable action creation for vendor billing."""
     if created:
+        should_bill = False
+
+        # Case 1: Organization is a vendor
+        if hasattr(instance.organization, 'is_vendor') and instance.organization.is_vendor:
+            should_bill = True
+
+        # Case 2: Check user's organization membership
+        if instance.user:
+            try:
+                org_membership = OrganizationMembership.objects.get(
+                    user=instance.user,
+                    organization=instance.organization,
+                    status='active'
+                )
+                if org_membership.is_external_annotator and org_membership.billing_enabled:
+                    should_bill = True
+            except OrganizationMembership.DoesNotExist:
+                pass
+
+        # Case 3: Check user's project membership (highest priority)
+        if instance.user and instance.project:
+            try:
+                project_membership = ProjectMembership.objects.get(
+                    user=instance.user,
+                    project=instance.project
+                )
+                if project_membership.is_external_annotator and project_membership.billing_enabled:
+                    should_bill = True
+            except ProjectMembership.DoesNotExist:
+                pass
+
         # Only create billing for vendor organizations
-        if instance.organization.is_vendor:  # Add this flag to Organization model
+        if should_bill:
             transaction.on_commit(lambda: create_billable_action_from_event.delay(
                 str(instance.event_id)
             ))

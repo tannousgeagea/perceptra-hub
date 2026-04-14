@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from django.db.models import Q
-from api.dependencies import RequestContext, get_request_context
+from api.dependencies import RequestContext, get_request_context, require_permission
 from api.routers.billing.schemas import InvoiceOut, InvoiceGenerateRequest
 
 router = APIRouter(prefix="/billing")
@@ -27,7 +27,7 @@ router = APIRouter(prefix="/billing")
 async def generate_invoice(
     org_id: UUID,
     invoice_data: InvoiceGenerateRequest,
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     Generate an invoice from unbilled actions for a specific period.
@@ -53,7 +53,7 @@ async def generate_invoice(
         
         # Verify client organization
         try:
-            client_org = Organization.objects.get(id=data.client_organization_id)
+            client_org = Organization.objects.get(org_id=data.client_organization_id)
         except Organization.DoesNotExist:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -195,9 +195,9 @@ async def generate_invoice(
     return InvoiceOut(
         invoice_id=invoice.invoice_id,
         invoice_number=invoice.invoice_number,
-        vendor_organization_id=invoice.vendor_organization.id,
+        vendor_organization_id=invoice.vendor_organization.org_id,
         vendor_organization_name=invoice.vendor_organization.name,
-        client_organization_id=invoice.client_organization.id,
+        client_organization_id=invoice.client_organization.org_id,
         client_organization_name=invoice.client_organization.name,
         project_id=invoice.project.project_id if invoice.project else None,
         project_name=invoice.project.name if invoice.project else None,
@@ -253,8 +253,9 @@ async def list_invoices(
         from organizations.models import Organization
         
         try:
-            vendor_org = Organization.objects.get(id=org_id)
+            vendor_org = Organization.objects.get(id=org.pk)
         except Organization.DoesNotExist:
+            from fastapi import status
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Organization not found"
@@ -302,9 +303,9 @@ async def list_invoices(
         InvoiceOut(
             invoice_id=inv.invoice_id,
             invoice_number=inv.invoice_number,
-            vendor_organization_id=inv.vendor_organization.id,
+            vendor_organization_id=inv.vendor_organization.org_id,
             vendor_organization_name=inv.vendor_organization.name,
-            client_organization_id=inv.client_organization.id,
+            client_organization_id=inv.client_organization.org_id,
             client_organization_name=inv.client_organization.name,
             project_id=inv.project.project_id if inv.project else None,
             project_name=inv.project.name if inv.project else None,
@@ -360,9 +361,9 @@ async def get_invoice(
     return InvoiceOut(
         invoice_id=inv.invoice_id,
         invoice_number=inv.invoice_number,
-        vendor_organization_id=inv.vendor_organization.id,
+        vendor_organization_id=inv.vendor_organization.org_id,
         vendor_organization_name=inv.vendor_organization.name,
-        client_organization_id=inv.client_organization.id,
+        client_organization_id=inv.client_organization.org_id,
         client_organization_name=inv.client_organization.name,
         project_id=inv.project.project_id if inv.project else None,
         project_name=inv.project.name if inv.project else None,
@@ -436,9 +437,9 @@ async def issue_invoice(
     return InvoiceOut(
         invoice_id=inv.invoice_id,
         invoice_number=inv.invoice_number,
-        vendor_organization_id=inv.vendor_organization.id,
+        vendor_organization_id=inv.vendor_organization.org_id,
         vendor_organization_name=inv.vendor_organization.name,
-        client_organization_id=inv.client_organization.id,
+        client_organization_id=inv.client_organization.org_id,
         client_organization_name=inv.client_organization.name,
         project_id=inv.project.project_id if inv.project else None,
         project_name=inv.project.name if inv.project else None,
@@ -516,9 +517,9 @@ async def mark_invoice_paid(
     return InvoiceOut(
         invoice_id=inv.invoice_id,
         invoice_number=inv.invoice_number,
-        vendor_organization_id=inv.vendor_organization.id,
+        vendor_organization_id=inv.vendor_organization.org_id,
         vendor_organization_name=inv.vendor_organization.name,
-        client_organization_id=inv.client_organization.id,
+        client_organization_id=inv.client_organization.org_id,
         client_organization_name=inv.client_organization.name,
         project_id=inv.project.project_id if inv.project else None,
         project_name=inv.project.name if inv.project else None,

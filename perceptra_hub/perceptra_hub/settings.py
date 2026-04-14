@@ -414,6 +414,33 @@ UNFOLD = {
                 ]  
             },
             {
+                "title": _("Billing"),
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": _("Billing Rate Card"),
+                        "icon": "add_card",
+                        "link": reverse_lazy(
+                            "admin:billing_billingratecard_changelist"
+                        )
+                    },
+                    {
+                        "title": _("Billable Action"),
+                        "icon": "action_key",
+                        "link": reverse_lazy(
+                            "admin:billing_billableaction_changelist"
+                        )
+                    },
+                    {
+                        "title": _("Invoices"),
+                        "icon": "receipt",
+                        "link": reverse_lazy(
+                            "admin:billing_invoice_changelist"
+                        )
+                    },
+                ]
+            },
+            {
                 "title": _("MetaData"),
                 "collapsible": True,
                 "items": [
