@@ -30,7 +30,7 @@ async def list_organization_contractors(
     org_id: UUID,
     billing_enabled: Optional[bool] = Query(None),
     has_unbilled_actions: Optional[bool] = Query(None),
-    ctx: RequestContext = Depends(require_permission('admin'))
+    ctx: RequestContext = Depends(require_permission('write'))
 ):
     """
     List all external contractors in organization with billing summary.
@@ -190,7 +190,7 @@ async def list_project_contractors(
             contractor_company=None,  # Project membership doesn't have this field
             contract_start_date=None,
             contract_end_date=None,
-            total_unbilled_amount=c['unbilled_amount'],
+            total_unbilled_amount=float(c['unbilled_amount']),
             total_actions_this_month=c['monthly_actions']
         )
         for c in contractors

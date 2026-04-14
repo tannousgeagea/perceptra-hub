@@ -162,11 +162,11 @@ class BackfillTaskResponse(BaseModel):
 
 
 class UserBillingSummary(BaseModel):
-    user_id: UUID
+    user_id: int
     username: str
     full_name: str
     scope: str  # 'organization' or 'project'
-    scope_id: UUID
+    scope_id: UUID  # org_id or project_id (both are UUIDs)
     scope_name: str
     
     # Billing status
@@ -209,7 +209,7 @@ class BillableActionDetail(BaseModel):
 
 
 class ContractorListItem(BaseModel):
-    user_id: UUID
+    user_id: int
     username: str
     full_name: str
     email: str

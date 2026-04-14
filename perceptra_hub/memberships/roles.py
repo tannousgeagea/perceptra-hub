@@ -60,21 +60,34 @@ PROJECT_ROLE_RANK: Dict[str, int] = {
 # so that logic is NOT encoded here — it lives in ProjectContext.
 
 PERMISSION_TO_ORG_ROLES: Dict[str, FrozenSet[str]] = {
-    # Read org resources (projects, members, models…)
+    # ── API-key-style permission levels (read / write / admin) ──────────────
+    # These mirror APIKey.PERMISSION_CHOICES and are the canonical keys for
+    # use with Depends(require_permission("read"/"write"/"admin")).
+    "read":    frozenset({OrgRole.VIEWER, OrgRole.OPERATOR, OrgRole.EDITOR,
+                          OrgRole.ADMIN, OrgRole.OWNER}),
+    "write":   frozenset({OrgRole.EDITOR, OrgRole.ADMIN, OrgRole.OWNER}),
+    "admin":   frozenset({OrgRole.ADMIN, OrgRole.OWNER}),
+
+    # ── Semantic / human-readable aliases ────────────────────────────────────
     "view":    frozenset({OrgRole.VIEWER, OrgRole.OPERATOR, OrgRole.EDITOR,
                           OrgRole.ADMIN, OrgRole.OWNER}),
-    # Operational tasks (e.g. trigger training runs, import data)
     "operate": frozenset({OrgRole.OPERATOR, OrgRole.EDITOR,
                           OrgRole.ADMIN, OrgRole.OWNER}),
-    # Create / update org resources
     "edit":    frozenset({OrgRole.EDITOR, OrgRole.ADMIN, OrgRole.OWNER}),
-    # Manage org members, API keys, settings
     "manage":  frozenset({OrgRole.ADMIN, OrgRole.OWNER}),
-    # Transfer / delete the organization
     "own":     frozenset({OrgRole.OWNER}),
+    "owner":   frozenset({OrgRole.OWNER}),
 }
 
 PERMISSION_TO_PROJECT_ROLES: Dict[str, FrozenSet[str]] = {
+    # ── API-key-style permission levels ──────────────────────────────────────
+    "read":     frozenset({ProjectRole.VIEWER, ProjectRole.ANNOTATOR,
+                           ProjectRole.REVIEWER, ProjectRole.EDITOR,
+                           ProjectRole.ADMIN, ProjectRole.OWNER}),
+    "write":    frozenset({ProjectRole.EDITOR, ProjectRole.ADMIN,
+                           ProjectRole.OWNER}),
+
+    # ── Semantic aliases ──────────────────────────────────────────────────────
     # View images, annotations, model outputs
     "view":     frozenset({ProjectRole.VIEWER, ProjectRole.ANNOTATOR,
                            ProjectRole.REVIEWER, ProjectRole.EDITOR,
@@ -91,8 +104,10 @@ PERMISSION_TO_PROJECT_ROLES: Dict[str, FrozenSet[str]] = {
                            ProjectRole.OWNER}),
     # Manage project members and roles
     "manage":   frozenset({ProjectRole.ADMIN, ProjectRole.OWNER}),
+    "admin":   frozenset({ProjectRole.ADMIN, ProjectRole.OWNER}),
     # Delete project, transfer ownership
     "own":      frozenset({ProjectRole.OWNER}),
+    "owner":      frozenset({ProjectRole.OWNER}),
 }
 
 
@@ -133,6 +148,7 @@ def roles_for_permission(permission: str, scope: str = "org") -> FrozenSet[str]:
         PERMISSION_TO_PROJECT_ROLES if scope == "project"
         else PERMISSION_TO_ORG_ROLES
     )
+
     return matrix.get(permission, frozenset())
 
 

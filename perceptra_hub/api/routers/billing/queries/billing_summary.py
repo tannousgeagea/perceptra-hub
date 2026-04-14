@@ -25,7 +25,7 @@ router = APIRouter(prefix="/billing")
 )
 async def get_user_org_billing_summary(
     org_id: UUID,
-    user_id: UUID,
+    user_id: int,
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     ctx: RequestContext = Depends(require_permission('admin'))
@@ -101,7 +101,7 @@ async def get_user_org_billing_summary(
         username=data['user'].username,
         full_name=data['user'].get_full_name() or data['user'].username,
         scope='organization',
-        scope_id=data['org'].id,
+        scope_id=data['org'].org_id,
         scope_name=data['org'].name,
         is_external_annotator=data['membership'].is_external_annotator,
         billing_enabled=data['membership'].billing_enabled,
@@ -134,7 +134,7 @@ async def get_user_org_billing_summary(
 )
 async def get_user_project_billing_summary(
     project_id: UUID,
-    user_id: UUID,
+    user_id: int,
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     ctx: RequestContext = Depends(require_permission('admin'))
@@ -239,7 +239,7 @@ async def get_user_project_billing_summary(
 )
 async def get_user_billable_actions_in_org(
     org_id: UUID,
-    user_id: UUID,
+    user_id: int,
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     action_type: Optional[str] = Query(None),

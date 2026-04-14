@@ -196,7 +196,7 @@ def require_permission(permission: str):
             if not ctx.has_role(*allowed_roles):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Requires '{permission}' permission",
+                    detail=f"Requires '{permission}' permission: {allowed_roles}",
                 )
         return ctx
 

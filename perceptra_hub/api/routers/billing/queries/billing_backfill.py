@@ -26,7 +26,7 @@ router = APIRouter(prefix="/billing")
 )
 async def backfill_user_in_org(
     org_id: UUID,
-    user_id: UUID,
+    user_id: int,
     start_date: Optional[datetime] = Body(None),
     end_date: Optional[datetime] = Body(None),
     ctx: RequestContext = Depends(require_permission('admin'))
@@ -61,7 +61,7 @@ async def backfill_user_in_org(
 )
 async def backfill_user_in_project(
     project_id: UUID,
-    user_id: UUID,
+    user_id: int,
     start_date: Optional[datetime] = Body(None),
     end_date: Optional[datetime] = Body(None),
     ctx: RequestContext = Depends(require_permission('admin'))

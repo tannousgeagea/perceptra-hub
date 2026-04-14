@@ -21,7 +21,7 @@ router = APIRouter(prefix="/billing")
 )
 async def enable_org_member_billing(
     org_id: UUID,
-    user_id: UUID,
+    user_id: int,
     is_external: bool = Body(...),
     billing_enabled: bool = Body(...),
     rate_card_id: Optional[UUID] = Body(None),
@@ -108,7 +108,7 @@ async def enable_org_member_billing(
 )
 async def enable_project_member_billing(
     project_id: UUID,
-    user_id: UUID,
+    user_id: int,
     is_external: bool = Body(...),
     billing_enabled: bool = Body(...),
     rate_card_id: Optional[UUID] = Body(None),
