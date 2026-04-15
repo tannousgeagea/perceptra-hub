@@ -23,11 +23,15 @@ All patterns are taken verbatim from ``images.py``:
 * Optimistic storage delete AFTER DB commit (delete actions).
 """
 
+import csv
+import io
+import json
 import logging
 from typing import Optional, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from asgiref.sync import sync_to_async
 from pydantic import BaseModel, Field, field_validator
 
@@ -119,6 +123,10 @@ class BulkClusterActionRequest(BaseModel):
     action: str = Field(
         description="archive_duplicates | delete_duplicates | mark_reviewed"
     )
+    atomic: bool = Field(
+        default=False,
+        description="If true, all actions succeed or none do (single transaction)",
+    )
 
     @field_validator("action")
     @classmethod
@@ -127,6 +135,14 @@ class BulkClusterActionRequest(BaseModel):
         if v not in allowed:
             raise ValueError(f"Bulk action must be one of: {', '.join(sorted(allowed))}")
         return v
+
+
+class ReclusterRequest(BaseModel):
+    similarity_threshold: float = Field(
+        ge=0.50,
+        le=1.00,
+        description="New similarity threshold 0.50–1.00",
+    )
 
 
 # ============================================================================
@@ -155,7 +171,12 @@ def _serialize_scan(scan) -> dict:
     }
 
 
-def _serialize_cluster(cluster, include_members: bool = False) -> dict:
+def _serialize_cluster(
+    cluster,
+    include_members: bool = False,
+    member_limit: int = 50,
+    member_offset: int = 0,
+) -> dict:
     data = {
         "cluster_id":     str(cluster.cluster_id),
         "scan_id":        str(cluster.scan.scan_id),
@@ -170,16 +191,25 @@ def _serialize_cluster(cluster, include_members: bool = False) -> dict:
     }
 
     if include_members:
+        member_qs = (
+            cluster.members
+            .select_related("image", "image__storage_profile", "image__uploaded_by")
+            .order_by("-similarity_score")[member_offset:member_offset + member_limit]
+        )
         data["members"] = [
             {
                 "image":            _serialize_image_stub(m.image),
                 "role":             m.role,
                 "similarity_score": round(m.similarity_score, 4),
             }
-            for m in cluster.members.select_related(
-                "image", "image__storage_profile", "image__uploaded_by"
-            ).order_by("-similarity_score")
+            for m in member_qs
         ]
+        data["members_page"] = {
+            "offset":      member_offset,
+            "limit":       member_limit,
+            "total":       cluster.member_count,
+            "has_more":    (member_offset + member_limit) < cluster.member_count,
+        }
 
     return data
 
@@ -231,23 +261,8 @@ async def create_scan(
 
     @sync_to_async
     def _create(payload, ctx):
-        from similarity.models import SimilarityScan, ScanStatus, ScanScope
+        from similarity.models import ScanScope
         from similarity.services.similarity_scan import create_scan as svc_create_scan
-
-        # Guard: no concurrent scans for same org + scope
-        active = SimilarityScan.objects.filter(
-            organization=ctx.organization,
-            status__in=[ScanStatus.PENDING, ScanStatus.RUNNING],
-            scope=payload.scope,
-        )
-        if payload.project_id:
-            active = active.filter(project__project_id=payload.project_id)
-
-        if active.exists():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A scan is already running for this scope. Cancel it before starting a new one.",
-            )
 
         # Resolve project if scoped
         project = None
@@ -270,14 +285,20 @@ async def create_scan(
                     detail=f"Project {payload.project_id} not found",
                 )
 
-        scan = svc_create_scan(
-            organization=ctx.organization,
-            project=project,
-            scope=payload.scope,
-            algorithm=payload.algorithm,
-            similarity_threshold=payload.similarity_threshold,
-            initiated_by=ctx.user,
-        )
+        try:
+            scan = svc_create_scan(
+                organization=ctx.organization,
+                project=project,
+                scope=payload.scope,
+                algorithm=payload.algorithm,
+                similarity_threshold=payload.similarity_threshold,
+                initiated_by=ctx.user,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            )
         return scan
 
     scan = await _create(payload, ctx)
@@ -398,6 +419,59 @@ async def cancel_scan(
 
 
 # ============================================================================
+# Recluster
+# ============================================================================
+
+@router.post(
+    "/scans/{scan_id}/recluster",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Recluster Scan",
+    description=(
+        "Re-run clustering on a completed scan with a new similarity threshold. "
+        "Reuses existing cached hashes — no images are re-downloaded. "
+        "Returns immediately with status=pending; poll GET /similarity/scans/{scan_id} for progress."
+    ),
+)
+async def recluster_scan_endpoint(
+    scan_id: UUID,
+    payload: ReclusterRequest,
+    ctx:     RequestContext = Depends(get_request_context),
+):
+    @sync_to_async
+    def _recluster(scan_id, payload, ctx):
+        from similarity.models import SimilarityScan
+        from similarity.services.similarity_scan import recluster as svc_recluster
+
+        try:
+            scan = SimilarityScan.objects.get(
+                scan_id=scan_id, organization=ctx.organization
+            )
+        except SimilarityScan.DoesNotExist:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Scan {scan_id} not found",
+            )
+
+        try:
+            return svc_recluster(scan, new_similarity_threshold=payload.similarity_threshold)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            )
+
+    scan = await _recluster(scan_id, payload, ctx)
+
+    from similarity.tasks import recluster_scan
+    recluster_scan.delay(str(scan.scan_id), scan.threshold)
+
+    return {
+        "message": "Recluster queued successfully",
+        **_serialize_scan(scan),
+    }
+
+
+# ============================================================================
 # Scan results  — clusters
 # ============================================================================
 
@@ -482,12 +556,17 @@ async def get_scan_results(
 @router.get(
     "/scans/{scan_id}/results/{cluster_id}",
     summary="Get Cluster Detail",
-    description="Get full detail for a single cluster, including all member images.",
+    description=(
+        "Get detail for a single cluster including member images. "
+        "Use member_offset / member_limit to page through large clusters."
+    ),
 )
 async def get_cluster_detail(
-    scan_id:    UUID,
-    cluster_id: UUID,
-    ctx:        RequestContext = Depends(get_request_context),
+    scan_id:       UUID,
+    cluster_id:    UUID,
+    ctx:           RequestContext = Depends(get_request_context),
+    member_offset: int = Query(0,  ge=0,  description="Member pagination offset"),
+    member_limit:  int = Query(50, ge=1, le=200, description="Members per page"),
 ):
     @sync_to_async
     def _get_cluster(scan_id, cluster_id, ctx):
@@ -510,16 +589,15 @@ async def get_cluster_detail(
     cluster = await _get_cluster(scan_id, cluster_id, ctx)
 
     @sync_to_async
-    def _enrich(cluster):
-        # Fetch action history
+    def _enrich(cluster, member_offset, member_limit):
         actions = list(
             cluster.actions.select_related("performed_by").order_by("-performed_at")[:20]
         )
         return cluster, actions
 
-    cluster, actions = await _enrich(cluster)
+    cluster, actions = await _enrich(cluster, member_offset, member_limit)
 
-    data = _serialize_cluster(cluster, include_members=True)
+    data = _serialize_cluster(cluster, include_members=True, member_limit=member_limit, member_offset=member_offset)
     data["action_history"] = [
         {
             "action_id":    str(a.action_id),
@@ -630,6 +708,7 @@ async def bulk_cluster_action(
                 action_type=payload.action,
                 organization=ctx.organization,
                 performed_by=ctx.user,
+                atomic=payload.atomic,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -740,6 +819,93 @@ async def get_similar_images(
 
 
 # ============================================================================
+# Export
+# ============================================================================
+
+@router.get(
+    "/scans/{scan_id}/export",
+    summary="Export Scan Results",
+    description=(
+        "Export similarity scan results as CSV or JSON. "
+        "Each row represents one cluster with its representative image and member count."
+    ),
+)
+async def export_scan_results(
+    scan_id:    UUID,
+    ctx:        RequestContext = Depends(get_request_context),
+    fmt:        str = Query("csv", alias="format", description="csv | json"),
+):
+    if fmt not in ("csv", "json"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="format must be 'csv' or 'json'",
+        )
+
+    @sync_to_async
+    def _export(scan_id, ctx):
+        from similarity.models import SimilarityScan, SimilarityCluster
+
+        try:
+            scan = SimilarityScan.objects.get(
+                scan_id=scan_id, organization=ctx.organization
+            )
+        except SimilarityScan.DoesNotExist:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Scan {scan_id} not found",
+            )
+
+        clusters = list(
+            SimilarityCluster.objects.filter(scan=scan)
+            .select_related("representative", "reviewed_by")
+            .order_by("-member_count")
+        )
+        return scan, clusters
+
+    scan, clusters = await _export(scan_id, ctx)
+
+    rows = [
+        {
+            "cluster_id":     str(c.cluster_id),
+            "member_count":   c.member_count,
+            "avg_similarity": round(c.avg_similarity or 0, 4),
+            "max_similarity": round(c.max_similarity or 0, 4),
+            "status":         c.status,
+            "representative_image_id": str(c.representative.image_id) if c.representative else "",
+            "representative_name":     c.representative.name if c.representative else "",
+            "representative_storage_key": c.representative.storage_key if c.representative else "",
+            "reviewed_by":    c.reviewed_by.username if c.reviewed_by else "",
+            "reviewed_at":    c.reviewed_at.isoformat() if c.reviewed_at else "",
+            "created_at":     c.created_at.isoformat(),
+        }
+        for c in clusters
+    ]
+
+    filename_base = f"similarity_scan_{str(scan_id)[:8]}"
+
+    if fmt == "json":
+        content = json.dumps({"scan_id": str(scan_id), "clusters": rows}, indent=2)
+        return StreamingResponse(
+            iter([content]),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.json"'},
+        )
+
+    # CSV
+    output = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'},
+    )
+
+
+# ============================================================================
 # Statistics
 # ============================================================================
 
@@ -755,7 +921,8 @@ async def get_similarity_stats(
     @sync_to_async
     def _stats(ctx, project_id):
         from similarity.models import SimilarityScan, SimilarityCluster, ScanStatus, ClusterStatus
-        from django.db.models import Count, Sum, Avg
+        from django.db.models import Count, Sum, Avg, Q, Case, When, FloatField
+        import django.db.models
 
         scan_qs = SimilarityScan.objects.filter(organization=ctx.organization)
         if project_id:
@@ -763,8 +930,8 @@ async def get_similarity_stats(
 
         scan_stats = scan_qs.aggregate(
             total_scans=Count("id"),
-            completed_scans=Count("id", filter=django.db.models.Q(status=ScanStatus.COMPLETED)),
-            running_scans=Count("id", filter=django.db.models.Q(status=ScanStatus.RUNNING)),
+            completed_scans=Count("id", filter=Q(status=ScanStatus.COMPLETED)),
+            running_scans=Count("id",   filter=Q(status=ScanStatus.RUNNING)),
         )
 
         cluster_qs = SimilarityCluster.objects.filter(scan__organization=ctx.organization)
@@ -773,23 +940,34 @@ async def get_similarity_stats(
 
         cluster_stats = cluster_qs.aggregate(
             total_clusters=Count("id"),
-            unreviewed=Count("id", filter=django.db.models.Q(status=ClusterStatus.UNREVIEWED)),
-            reviewed=Count("id",   filter=django.db.models.Q(status=ClusterStatus.REVIEWED)),
-            actioned=Count("id",   filter=django.db.models.Q(status=ClusterStatus.ACTIONED)),
+            unreviewed=Count("id", filter=Q(status=ClusterStatus.UNREVIEWED)),
+            reviewed=Count("id",   filter=Q(status=ClusterStatus.REVIEWED)),
+            actioned=Count("id",   filter=Q(status=ClusterStatus.ACTIONED)),
             total_members=Sum("member_count"),
             avg_cluster_size=Avg("member_count"),
         )
 
-        total_clusters = cluster_stats["total_clusters"] or 0
-        total_members  = cluster_stats["total_members"]  or 0
+        total_clusters   = cluster_stats["total_clusters"] or 0
+        total_members    = cluster_stats["total_members"]  or 0
         total_duplicates = total_members - total_clusters
+
+        # Similarity distribution histogram — 10 buckets: [0.50,0.55), ..., [0.95,1.0]
+        buckets = [round(0.50 + i * 0.05, 2) for i in range(10)]
+        histogram = []
+        for lo in buckets:
+            hi = round(lo + 0.05, 2)
+            count = cluster_qs.filter(
+                avg_similarity__gte=lo,
+                avg_similarity__lt=(hi if hi < 1.01 else 1.01),
+            ).count()
+            histogram.append({"from": lo, "to": hi, "count": count})
 
         latest_scan = scan_qs.filter(status=ScanStatus.COMPLETED).order_by("-completed_at").first()
 
-        return scan_stats, cluster_stats, total_duplicates, latest_scan
+        return scan_stats, cluster_stats, total_duplicates, histogram, latest_scan
 
     import django.db.models
-    scan_stats, cluster_stats, total_duplicates, latest_scan = await _stats(ctx, project_id)
+    scan_stats, cluster_stats, total_duplicates, histogram, latest_scan = await _stats(ctx, project_id)
 
     return {
         "scans": {
@@ -805,6 +983,7 @@ async def get_similarity_stats(
             "avg_cluster_size": round(cluster_stats["avg_cluster_size"] or 0, 1),
         },
         "total_duplicates": total_duplicates,
+        "similarity_distribution": histogram,
         "latest_scan": {
             "scan_id":      str(latest_scan.scan_id),
             "completed_at": latest_scan.completed_at.isoformat(),

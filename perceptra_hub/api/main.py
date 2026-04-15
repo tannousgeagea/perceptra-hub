@@ -75,7 +75,7 @@ def create_app() -> FastAPI:
 app = create_app()
 setup_exception_handlers(app)
 celery = app.celery_app
-celery.autodiscover_tasks(['api.tasks'])
+celery.autodiscover_tasks(['api.tasks', 'similarity.tasks'])
 
 if __name__ == "__main__":
     import os

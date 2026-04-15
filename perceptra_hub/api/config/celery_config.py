@@ -48,6 +48,7 @@ class BaseConfig:
         Queue("cleanup"),          # Cleanup tasks
         Queue("kpi_computation"),  # KPI computation
         Queue("maintenance"),      # Maintenance tasks
+        Queue("similarity"),       # Perceptual-similarity scans
     )
     
     # Performance

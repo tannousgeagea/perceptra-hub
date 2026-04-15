@@ -43,23 +43,76 @@ def create_scan(
     Create and persist a ``SimilarityScan``, converting the float similarity
     threshold to an integer Hamming distance for the clustering algorithm.
 
+    Enforces at most one PENDING/RUNNING scan per org+scope using
+    ``select_for_update`` to prevent race conditions under concurrent requests.
+
     Does NOT dispatch the Celery task — the caller is responsible for that
     so the scan_id is always available in the response before the task starts.
     """
     hamming = _similarity_to_hamming(similarity_threshold)
 
-    scan = SimilarityScan.objects.create(
-        organization=organization,
-        project=project,
-        scope=scope,
-        algorithm=algorithm,
-        similarity_threshold=similarity_threshold,
-        threshold=hamming,
-        initiated_by=initiated_by,
-        status=ScanStatus.PENDING,
-    )
+    with transaction.atomic():
+        # Lock any existing active rows so concurrent requests block here
+        # rather than racing past the exists() check.
+        active_qs = SimilarityScan.objects.select_for_update().filter(
+            organization=organization,
+            status__in=[ScanStatus.PENDING, ScanStatus.RUNNING],
+            scope=scope,
+        )
+        if project:
+            active_qs = active_qs.filter(project=project)
+
+        if active_qs.exists():
+            raise ValueError(
+                "A scan is already running for this scope. Cancel it before starting a new one."
+            )
+
+        scan = SimilarityScan.objects.create(
+            organization=organization,
+            project=project,
+            scope=scope,
+            algorithm=algorithm,
+            similarity_threshold=similarity_threshold,
+            threshold=hamming,
+            initiated_by=initiated_by,
+            status=ScanStatus.PENDING,
+        )
+
     logger.info("Created scan %s (org=%s, algo=%s, threshold=%.2f → hamming=%d)",
                 scan.scan_id, organization.slug, algorithm, similarity_threshold, hamming)
+    return scan
+
+
+def recluster(
+    scan: SimilarityScan,
+    new_similarity_threshold: float,
+) -> SimilarityScan:
+    """
+    Queue a recluster run on a completed scan with a new similarity threshold.
+
+    Reuses existing ``ImageHash`` rows — no images are re-downloaded.
+    The scan's threshold fields are updated and its status is reset to PENDING.
+    """
+    if scan.status not in (ScanStatus.COMPLETED, ScanStatus.FAILED):
+        raise ValueError(
+            f"Only completed or failed scans can be reclustered (current status: '{scan.status}')"
+        )
+
+    hamming = _similarity_to_hamming(new_similarity_threshold)
+    scan.threshold             = hamming
+    scan.similarity_threshold  = new_similarity_threshold
+    scan.status                = ScanStatus.PENDING
+    scan.clusters_found        = 0
+    scan.completed_at          = None
+    scan.error_log             = None
+    scan.save(update_fields=[
+        "threshold", "similarity_threshold", "status",
+        "clusters_found", "completed_at", "error_log", "updated_at",
+    ])
+    logger.info(
+        "Queued recluster for scan %s (new threshold=%.2f → hamming=%d)",
+        scan.scan_id, new_similarity_threshold, hamming,
+    )
     return scan
 
 
@@ -78,9 +131,8 @@ def cancel_scan(scan: SimilarityScan, user) -> SimilarityScan:
 
     if scan.task_id:
         try:
-            from celery.app.control import Control
-            from config.celery import app as celery_app
-            Control(celery_app).revoke(scan.task_id, terminate=True, signal="SIGTERM")
+            from api.config.celery_utils import celery_app
+            celery_app.control.revoke(scan.task_id, terminate=True, signal="SIGTERM")
         except Exception as exc:
             logger.warning("Could not revoke Celery task %s: %s", scan.task_id, exc)
 
@@ -130,9 +182,17 @@ def bulk_action_clusters(
     action_type: str,
     organization,
     performed_by,
+    atomic: bool = False,
 ) -> dict:
     """
     Apply ``action_type`` to multiple clusters identified by their UUIDs.
+
+    Parameters
+    ----------
+    atomic:
+        If True, wraps all cluster actions in a single ``transaction.atomic``
+        block — either all succeed or none do.  Default is False (best-effort,
+        partial success reported).
 
     Returns aggregated counts.
     """
@@ -148,23 +208,32 @@ def bulk_action_clusters(
 
     results = {"total": len(clusters), "successful": 0, "failed": 0, "details": []}
 
-    for cluster in clusters:
-        try:
-            summary = action_cluster(
-                cluster=cluster,
-                action_type=action_type,
-                performed_by=performed_by,
-            )
-            results["successful"] += 1
-            results["details"].append({"cluster_id": str(cluster.cluster_id), "status": "ok", **summary})
-        except Exception as exc:
-            results["failed"] += 1
-            results["details"].append({
-                "cluster_id": str(cluster.cluster_id),
-                "status": "error",
-                "error": str(exc),
-            })
-            logger.error("Bulk action %s failed on cluster %s: %s", action_type, cluster.cluster_id, exc)
+    def _run_all():
+        for cluster in clusters:
+            try:
+                summary = action_cluster(
+                    cluster=cluster,
+                    action_type=action_type,
+                    performed_by=performed_by,
+                )
+                results["successful"] += 1
+                results["details"].append({"cluster_id": str(cluster.cluster_id), "status": "ok", **summary})
+            except Exception as exc:
+                results["failed"] += 1
+                results["details"].append({
+                    "cluster_id": str(cluster.cluster_id),
+                    "status": "error",
+                    "error": str(exc),
+                })
+                logger.error("Bulk action %s failed on cluster %s: %s", action_type, cluster.cluster_id, exc)
+                if atomic:
+                    raise  # bubble up to abort the transaction
+
+    if atomic:
+        with transaction.atomic():
+            _run_all()
+    else:
+        _run_all()
 
     return results
 
