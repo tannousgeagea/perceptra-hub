@@ -3,7 +3,7 @@ import cv2
 import time
 import random
 import numpy as np
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from datetime import datetime
 from typing import Callable, Optional
 from fastapi import Request
@@ -15,6 +15,7 @@ from annotations.models import Annotation, AnnotationGroup, AnnotationClass
 from inferences.models import PredictionImageResult, PredictionOverlay
 from common_utils.metrics.utils import annotation_to_box, ap_per_class
 from common_utils.detection.utils import box_iou_batch
+from api.dependencies import RequestContext, get_request_context
 
 class TimedRoute(APIRoute):
     def get_route_handler(self) -> Callable:
@@ -40,7 +41,8 @@ router = APIRouter(
     "/validation/metrics/{model_version_id}", methods=["GET"], tags=["Validation"]
     )
 def fetch_validation_metrics(
-    model_version_id:int
+    model_version_id:int,
+    ctx: RequestContext = Depends(get_request_context),
 ):
     try:
         model_version = ModelVersion.objects.get(id=model_version_id)

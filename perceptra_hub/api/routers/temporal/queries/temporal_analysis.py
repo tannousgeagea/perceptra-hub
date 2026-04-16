@@ -2,7 +2,7 @@
 Temporal Analysis API Endpoints
 """
 
-from fastapi import APIRouter, Query, Path, HTTPException
+from fastapi import APIRouter, Query, Path, HTTPException, Depends
 from typing import Optional, List
 from datetime import datetime, timedelta
 from pydantic import BaseModel
@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from temporal_analysis.models import MetricSnapshot, MetricAlert
 from projects.models import Project
 from api.routers.temporal.schemas import TemporalResponse, TrendPoint, TrendAnalysis, SnapshotResponse
-
+from api.dependencies import RequestContext, get_request_context
 
 router = APIRouter(prefix="/temporal",)
 
@@ -27,6 +27,7 @@ async def get_project_trends(
     project_id: int = Path(...),
     days: int = Query(30, ge=1, le=365, description="Lookback period in days"),
     model_version_id: Optional[int] = Query(None, description="Filter by model version"),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """
     Get time-series performance trends.
@@ -126,6 +127,7 @@ async def get_project_trends(
 async def get_project_snapshots(
     project_id: int = Path(...),
     limit: int = Query(100, ge=1, le=500),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Get list of all metric snapshots"""
     

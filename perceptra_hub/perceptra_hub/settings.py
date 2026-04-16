@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     'compute',
     'temporal_analysis',
     'api_keys',
+    'similarity',
 ]
 
 MIDDLEWARE = [

@@ -9,7 +9,7 @@ Optimized queries with select_related, prefetch_related for N+1 prevention.
 import orjson
 import time
 from fastapi.routing import APIRoute
-from fastapi import Request, Response
+from fastapi import Request, Response, Depends
 from typing import List, Optional, Dict, Any, Callable
 from datetime import datetime
 from uuid import UUID
@@ -30,7 +30,7 @@ from annotations.models import Annotation, AnnotationAudit, ProjectImage, Annota
 from projects.models import Project
 from api.routers.evaluation.schemas import *
 from api.routers.evaluation.cache import get_evaluation_cache, CacheKeyBuilder
-
+from api.dependencies import RequestContext, get_request_context
 
 # ============================================================================
 # OPTIMIZED DJANGO ORM QUERIES
@@ -570,6 +570,7 @@ async def get_project_evaluation(
     # Pagination
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=1000),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """
     Retrieve images with annotations and evaluation metrics.
@@ -668,6 +669,7 @@ async def get_class_metrics(
     project_id: int = Path(...),
     model_version: Optional[str] = Query(None),
     reviewed_only: bool = Query(True),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """
     Get performance breakdown by class.
@@ -699,6 +701,7 @@ async def get_class_metrics(
 async def get_quick_summary(
     project_id: int = Path(...),
     model_version: Optional[str] = Query(None),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """
     Lightweight endpoint for dashboard/overview.
@@ -744,6 +747,7 @@ async def export_evaluation(
     project_id: int = Path(...),
     format: str = Query("json", pattern="^(json|csv)$"),
     model_version: Optional[str] = Query(None),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """
     Export complete evaluation data.

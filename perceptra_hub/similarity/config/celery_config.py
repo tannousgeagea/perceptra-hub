@@ -46,9 +46,8 @@ class BaseConfig:
     CELERY_TASK_QUEUES = (
         Queue("celery"),           # Default queue
         Queue("cleanup"),          # Cleanup tasks
-        Queue("kpi_computation"),  # KPI computation
+        Queue("similarity"),       # Similarity 
         Queue("maintenance"),      # Maintenance tasks
-        Queue("similarity"),       # Perceptual-similarity scans
     )
     
     # Performance
@@ -73,100 +72,7 @@ class BaseConfig:
     CELERY_TASK_REJECT_ON_WORKER_LOST = True
     
     # Beat schedule
-    CELERY_BEAT_SCHEDULE = {        
-    # Real-time aggregations
-    'aggregate-hourly-metrics': {
-        'task': 'api.tasks.activity.aggregate_hourly_metrics',
-        'schedule': crontab(minute=5),  # Every hour at :05
-        'options': {
-            "queue": 'activity'
-        }
-    },
-    
-    'aggregate-daily-metrics': {
-        'task': 'api.tasks.activity.aggregate_daily_metrics',
-        'schedule': crontab(hour=0, minute=5),  # Daily at 00:05
-        'options': {
-            "queue": 'activity'
-        }
-    },
-    
-    'aggregate-weekly-metrics': {
-        'task': 'api.tasks.activity.aggregate_weekly_metrics',
-        'schedule': crontab(day_of_week=1, hour=1, minute=0),  # Monday 01:00
-        'options': {
-            "queue": 'activity'
-        }
-    },
-    
-    'aggregate-monthly-metrics': {
-        'task': 'api.tasks.activity.aggregate_monthly_metrics',
-        'schedule': crontab(day_of_month=1, hour=2, minute=0),  # 1st of month 02:00
-        'options': {
-            "queue": 'activity'
-        }
-    },
-    
-    # Project metrics
-    'compute-project-metrics': {
-        'task': 'api.tasks.activity.compute_all_project_metrics',
-        'schedule': crontab(minute='*/15'),  # Every 15 minutes
-        'options': {
-            "queue": 'activity'
-        }
-    },
-    
-    # Cleanup
-    'cleanup-old-sessions': {
-        'task': 'api.tasks.activity.cleanup_old_sessions',
-        'schedule': crontab(minute=30),  # Every hour at :30
-        'options': {
-            "queue": 'activity'
-        }
-    },
-    
-    'cleanup-old-events': {
-        'task': 'api.tasks.activity.cleanup_old_events',
-        'schedule': crontab(hour=3, minute=0),  # Daily at 03:00
-        'options': {
-            "queue": 'activity'
-        }
-    },
-    
-    # Materialized views
-    'refresh-materialized-views': {
-        'task': 'api.tasks.activity.refresh_materialized_views',
-        'schedule': crontab(minute='0,30'),  # Every 30 minutes
-        'options': {
-            "queue": 'activity'
-        }
-    },
-    
-    # Reports
-    'weekly-reports': {
-        'task': 'api.tasks.activity.generate_weekly_reports',
-        'schedule': crontab(day_of_week=1, hour=6, minute=0),  # Monday 06:00
-        'options': {
-            "queue": 'activity'
-        }
-    },
-    
-    # Monitoring
-    'health-check': {
-        'task': 'api.tasks.activity.health_check_activity_system',
-        'schedule': crontab(minute='*/15'),  # Every 15 minutes
-        'options': {
-            "queue": 'activity'
-        }
-    },
-    
-    # Metric snapshot
-    'create-daily-snapshots': {
-        'task': 'api.tasks.evaluation.metric_snapshot.create_daily_snapshots',
-        'schedule': crontab(hour=2, minute=0),  # 2 AM daily
-        'options': {'expires': 3600}  # Task expires after 1 hour
-    },
-}
+    CELERY_BEAT_SCHEDULE = {}
 
 
 class DevelopmentConfig(BaseConfig):
