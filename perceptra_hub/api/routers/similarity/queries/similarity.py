@@ -229,6 +229,7 @@ def _serialize_image_stub(image) -> dict:
         "height":            image.height,
         "checksum":          image.checksum,
         "storage_key":       image.storage_key,
+        "download_url":      image.get_download_url(),
         "created_at":        image.created_at.isoformat(),
     }
 
@@ -493,9 +494,10 @@ async def get_scan_results(
     sort:       str  = Query("size_desc",
                              description="size_desc | size_asc | similarity_desc | date_asc"),
     min_size:   int  = Query(2, ge=2, description="Minimum cluster size"),
+    include_members: bool = Query(False, description="Include member images in each cluster"),
 ):
     @sync_to_async
-    def _results(scan_id, ctx, skip, limit, filter_status, sort, min_size):
+    def _results(scan_id, ctx, skip, limit, filter_status, sort, min_size, include_members):
         from similarity.models import SimilarityScan, SimilarityCluster
 
         try:
@@ -511,7 +513,15 @@ async def get_scan_results(
         qs = SimilarityCluster.objects.filter(
             scan=scan,
             member_count__gte=min_size,
-        ).select_related("scan", "representative", "reviewed_by")
+        ).select_related(
+            "scan", "representative", "representative__storage_profile", "reviewed_by"
+        )
+
+        if include_members:
+            qs = qs.prefetch_related(
+                "members__image",
+                "members__image__storage_profile",
+            )
 
         if filter_status:
             qs = qs.filter(status=filter_status)
@@ -527,6 +537,12 @@ async def get_scan_results(
         total    = qs.count()
         clusters = list(qs[skip:skip + limit])
 
+        # Serialise here (inside sync_to_async) so that ORM access in
+        # _serialize_cluster never escapes into the async context.
+        serialized_clusters = [
+            _serialize_cluster(c, include_members=include_members) for c in clusters
+        ]
+
         # Summary stats from the scan
         from django.db.models import Sum
         stats = SimilarityCluster.objects.filter(scan=scan).aggregate(
@@ -535,11 +551,11 @@ async def get_scan_results(
         )
         total_duplicates = (stats["total_members"] or 0) - (stats["total_clusters"] or 0)
 
-        return scan, total, clusters, total_duplicates
+        return scan, total, serialized_clusters, total_duplicates
 
     import django.db.models
-    scan, total, clusters, total_duplicates = await _results(
-        scan_id, ctx, skip, limit, filter_status, sort, min_size
+    scan, total, serialized_clusters, total_duplicates = await _results(
+        scan_id, ctx, skip, limit, filter_status, sort, min_size, include_members
     )
 
     return {
@@ -549,7 +565,7 @@ async def get_scan_results(
         "total_duplicates": total_duplicates,
         "page":            (skip // limit) + 1,
         "page_size":       limit,
-        "clusters":        [_serialize_cluster(c, include_members=False) for c in clusters],
+        "clusters":        serialized_clusters,
     }
 
 
