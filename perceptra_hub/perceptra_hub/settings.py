@@ -202,6 +202,13 @@ STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
 MEDIA_URL = 'media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
+# Base URL prepended to local-storage media paths returned by the API.
+# Leave empty in production (same-origin, nginx handles routing).
+# In dev Docker set to the host-accessible backend URL, e.g. http://localhost:29085,
+# so browsers can reach the /api/v1/media/files/ endpoint directly without relying
+# on the Vite dev proxy (which runs inside the container and can't reach localhost:29085).
+MEDIA_BASE_URL = env('MEDIA_BASE_URL', '').rstrip('/')
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 

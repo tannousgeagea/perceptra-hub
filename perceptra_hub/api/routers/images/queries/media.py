@@ -18,12 +18,19 @@ def _media_url(storage_backend: str, storage_key: str) -> str:
     """Return a browser-accessible URL for a stored file.
 
     Cloud backends (Azure, S3, MinIO) already return HTTP presigned URLs.
-    Local storage returns a file:// URI which browsers cannot load, so we
-    return a relative path to the built-in file-serve endpoint instead.
+    Local storage serves files through the built-in /api/v1/media/files/ endpoint.
+
+    In production (same-origin, behind nginx) the URL is relative so nginx can
+    proxy it to the backend transparently.
+
+    In dev Docker the Vite proxy runs inside its container and cannot reach the
+    backend via localhost. Setting MEDIA_BASE_URL=http://localhost:29085 on the
+    backend makes the URL absolute so the browser hits the backend port directly.
     """
     if storage_backend == "local":
-        # URL-encode forward slashes are kept — storage_key is path-safe
-        return f"/api/v1/media/files/{storage_key}"
+        from django.conf import settings
+        base = getattr(settings, 'MEDIA_BASE_URL', '')
+        return f"{base}/api/v1/media/files/{storage_key}"
     return ""  # caller will call get_download_url for cloud backends
 
 
