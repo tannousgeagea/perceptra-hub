@@ -1,6 +1,6 @@
 # api/routers/suggestions/schemas.py
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List
 from enum import Enum
 from uuid import UUID
@@ -26,18 +26,23 @@ class PointPrompt(BaseModel):
     label: int = Field(1, description="1=foreground, 0=background")
 
 class Suggestion(BaseModel):
-    id: Optional[int] = Field(default=1)  # Frontend uses 'id'
-    suggestion_id: str = Field()
-    # suggestion_id: str
+    suggestion_id: str
+    id: str = ""  # mirrors suggestion_id; populated by validator so frontend gets a stable string key
     bbox: BoundingBox
     mask_rle: Optional[dict] = None
     polygons: Optional[List] = None
     confidence: float
     suggested_class_id: Optional[int] = None
     suggested_class_name: Optional[str] = None
-    type: str = "point"  # Add type field
-    status: str = "pending"  # Add status field
+    type: str = "point"
+    status: str = "pending"
     suggested_label: Optional[str] = Field(None, alias="suggested_class_name")
+
+    @model_validator(mode='after')
+    def _sync_id(self) -> 'Suggestion':
+        if not self.id:
+            self.id = self.suggestion_id
+        return self
     
 
 class ModelConfig(BaseModel):
@@ -62,8 +67,10 @@ class SessionCreateRequest(BaseModel):
 
 class SAMAutoRequest(BaseModel):
     """Auto-segment entire image."""
-    model: str = "sam2"
+    session_id: UUID
     points_per_side: int = Field(32, ge=8, le=64)
+    pred_iou_thresh: float = Field(0.88, ge=0.0, le=1.0)
+    stability_score_thresh: float = Field(0.95, ge=0.0, le=1.0)
     min_area: float = Field(0.001, description="Min bbox area as fraction of image")
 
 class SAMPointRequest(BaseModel):
@@ -96,6 +103,12 @@ class PreviousFrameRequest(BaseModel):
     """Propagate annotations from previous image."""
     source_image_id: int
     annotation_uids: Optional[List[str]] = None  # None = all
+    session_id: Optional[UUID] = None  # active SAM session to append into (optional)
+
+class SegmentationResponse(BaseModel):
+    """Lightweight response for non-SAM suggestion endpoints."""
+    suggestions: List[Suggestion] = []
+    count: int = 0
 
 class LabelSuggestionRequest(BaseModel):
     """Suggest labels for a bbox region."""
@@ -104,8 +117,13 @@ class LabelSuggestionRequest(BaseModel):
 
 class AcceptSuggestionsRequest(BaseModel):
     suggestion_ids: List[str]
-    class_id: Optional[str] = None  # Override suggested class
-    class_name: Optional[str] = None  # Add this
+    class_id: Optional[str] = None
+    class_name: Optional[str] = None
+    use_polygon: bool = Field(
+        True,
+        description="Store the SAM polygon contour in addition to the bounding box. "
+                    "Set False to create a plain bounding-box annotation.",
+    )
     
 class RejectSuggestionsRequest(BaseModel):
     suggestion_ids: List[str]

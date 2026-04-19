@@ -143,6 +143,12 @@ class Annotation(models.Model):
         help_text="Original bbox before any edits [x1,y1,x2,y2]"
     )
 
+    polygon_data = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Normalized polygon contour [[x,y], ...] from SAM mask. Complements the bbox in `data`.",
+    )
+
     original_class = models.ForeignKey(
         AnnotationClass,
         on_delete=models.SET_NULL,

@@ -134,61 +134,9 @@ class SuggestionService:
         return json.loads(cached) if cached else []
     
     # --------------------------------------------------------
-    # AI Inference Methods (integrate your SAM package here)
+    # Suggestion Operations (find_similar_objects, propagate, labels)
     # --------------------------------------------------------
-    
-    async def run_sam_auto(self, session_id: UUID, image_id: int, config: SAMAutoRequest):
-        """Background task: run SAM auto-segmentation."""
-        # 1. Load image
-        image_path = await self._get_image_path(image_id)
-        
-        # 2. Call SAM service (your external package)
-        # results = sam_service.auto_segment(image_path, config.points_per_side)
-        results = []  # Placeholder
-        
-        # 3. Convert to suggestions
-        suggestions = [
-            Suggestion(
-                suggestion_id=str(uuid_lib.uuid4()),
-                bbox=BoundingBox(x=r['bbox'][0], y=r['bbox'][1], 
-                                 width=r['bbox'][2], height=r['bbox'][3]),
-                mask=r.get('mask_rle'),
-                confidence=r['confidence']
-            )
-            for r in results
-            if (r['bbox'][2] * r['bbox'][3]) >= config.min_area
-        ]
-        
-        # 4. Cache results
-        self._store_suggestions(session_id, suggestions)
-        
-        # 5. Update session metrics
-        await self._update_session_count(session_id, len(suggestions))
-    
-    async def run_sam_point(
-        self, session_id: UUID, image_id: int, points: List[PointPrompt]
-    ) -> List[Suggestion]:
-        """Synchronous SAM point prompt."""
-        image_path = await self._get_image_path(image_id)
-        
-        # Call SAM with points
-        # result = sam_service.point_segment(image_path, [(p.x, p.y, p.label) for p in points])
-        result = {}  # Placeholder
-        
-        suggestions = []
-        if result:
-            suggestions.append(Suggestion(
-                suggestion_id=str(uuid_lib.uuid4()),
-                bbox=BoundingBox(x=result['bbox'][0], y=result['bbox'][1],
-                                 width=result['bbox'][2], height=result['bbox'][3]),
-                mask=result.get('mask_rle'),
-                confidence=result.get('confidence', 0.9)
-            ))
-        
-        self._store_suggestions(session_id, suggestions)
-        await self._update_session_count(session_id, len(suggestions))
-        return suggestions
-    
+
     async def find_similar_objects(
         self,
         session_id: UUID,
@@ -228,32 +176,46 @@ class SuggestionService:
     
     async def propagate_annotations(
         self,
-        session_id: UUID,
+        session_id: Optional[UUID],
         target_image_id: int,
         source_image_id: int,
-        annotation_uids: Optional[List[str]]
+        annotation_uids: Optional[List[str]],
     ) -> List[Suggestion]:
-        """Copy annotations from previous frame as suggestions."""
+        """Copy active annotations from a source image as pending suggestions.
+
+        No AI model is required.  If a session_id is provided the new
+        suggestions are *appended* to that session's existing cache so they
+        coexist with any SAM suggestions already there.
+        """
         source_anns = await self._get_image_annotations(source_image_id, annotation_uids)
-        
-        suggestions = [
+
+        new_suggestions = [
             Suggestion(
                 suggestion_id=str(uuid_lib.uuid4()),
                 bbox=BoundingBox(
-                    x=ann.data[0], y=ann.data[1],
+                    # ann.data is stored as [x1, y1, x2, y2] (normalized)
+                    x=ann.data[0],
+                    y=ann.data[1],
                     width=ann.data[2] - ann.data[0],
-                    height=ann.data[3] - ann.data[1]
+                    height=ann.data[3] - ann.data[1],
                 ),
-                confidence=0.95,  # High confidence for direct copy
+                confidence=0.95,
                 suggested_class_id=ann.annotation_class.class_id,
-                suggested_class_name=ann.annotation_class.name
+                suggested_class_name=ann.annotation_class.name,
+                type="propagated",
+                status="pending",
             )
             for ann in source_anns
         ]
-        
-        self._store_suggestions(session_id, suggestions)
-        await self._update_session_count(session_id, len(suggestions))
-        return suggestions
+
+        if session_id is not None:
+            # Append to existing cache — don't wipe SAM suggestions already there.
+            existing = self._get_suggestions(session_id)
+            combined = existing + [s.model_dump() for s in new_suggestions]
+            self.redis.set(self._cache_key(session_id), json.dumps(combined), self.suggestion_ttl)
+            await self._update_session_count(session_id, len(combined))
+
+        return new_suggestions
     
     async def suggest_labels(
         self,
@@ -298,16 +260,21 @@ class SuggestionService:
         class_name_override: Optional[str],
         user,
         project: Project,
-        image_id: int
+        image_id: int,
+        use_polygon: bool = True,
     ) -> List[str]:
         """Convert accepted suggestions into real annotations."""
         suggestions = self._get_suggestions(session_id)
         to_accept = {s['suggestion_id']: s for s in suggestions if s['suggestion_id'] in suggestion_ids}
-        
+
+
+        import logging
+        logging.warning(to_accept)
         created_uids = []
-        
+
         for sid, sugg in to_accept.items():
-            # Handle both class_id and class_name
+
+            logging.warning(sugg)
             if class_id_override:
                 class_id = int(class_id_override)
             elif class_name_override:
@@ -315,9 +282,11 @@ class SuggestionService:
                 class_id = class_obj.class_id
             else:
                 class_id = sugg.get('suggested_class_id')
-            
-            
-            # Create annotation via existing logic
+
+
+            logging.warning(class_id)
+            polygons = sugg.get('polygons') if use_polygon else None
+
             uid = await self._create_annotation(
                 project=project,
                 image_id=image_id,
@@ -325,17 +294,16 @@ class SuggestionService:
                 class_id=class_id,
                 confidence=sugg['confidence'],
                 source='prediction',
-                user=user
+                user=user,
+                polygons=polygons,
             )
             created_uids.append(uid)
-        
-        # Update metrics
+
         await self._update_session_accepted(session_id, len(created_uids))
-        
-        # Remove accepted from cache
+
         remaining = [s for s in suggestions if s['suggestion_id'] not in suggestion_ids]
         self.redis.set(self._cache_key(session_id), json.dumps(remaining), self.suggestion_ttl)
-        
+
         return created_uids
     
     @sync_to_async
@@ -391,36 +359,68 @@ class SuggestionService:
         return list(AnnotationClass.objects.filter(annotation_group__project=project))
     
     @sync_to_async
-    def _create_annotation(self, project, image_id, bbox, class_id, confidence, source, user) -> str:
-        """Reuse existing annotation creation logic."""
+    def _create_annotation(
+        self, project, image_id, bbox, class_id, confidence, source, user,
+        polygons=None,
+    ) -> str:
+        """Create annotation, optionally storing the SAM polygon contour."""
         from annotations.models import Annotation, AnnotationClass, AnnotationType
-        
+
         image = ProjectImage.objects.get(id=image_id)
         ann_class = AnnotationClass.objects.get(
             class_id=class_id,
-            annotation_group__project=project
+            annotation_group__project=project,
         )
-        ann_type = AnnotationType.objects.get(name='Bounding Box')
-        
+
+        # Prefer 'Polygon' type when polygon data is present; fall back to 'Bounding Box'.
+        if polygons:
+            ann_type = (
+                AnnotationType.objects.filter(name="polygon").first()
+                or AnnotationType.objects.get(name="box")
+            )
+        else:
+            ann_type = AnnotationType.objects.get(name="box")
+
+        # Normalize polygon points to [0, 1] image-relative coords.
+        # The seg service returns pixel coords; `bbox` is already normalized,
+        # so we use the bbox to infer image scale if needed.
+        # Polygons from inference_client are already normalized (the client
+        # calls _pixel_bbox_to_norm), so we just clamp to [0, 1].
+        normalized_polygon = None
+        if polygons:
+            try:
+                best = max(polygons, key=lambda p: len(p))  # largest contour
+                normalized_polygon = [
+                    [max(0.0, min(1.0, float(x))), max(0.0, min(1.0, float(y)))]
+                    for x, y in best
+                ]
+            except Exception:
+                normalized_polygon = None
+
         uid = str(uuid_lib.uuid4())
-        
         with transaction.atomic():
-            ann = Annotation.objects.create(
+            Annotation.objects.create(
                 project_image=image,
                 annotation_type=ann_type,
                 annotation_class=ann_class,
-                data=[bbox['x'], bbox['y'], bbox['x'] + bbox['width'], bbox['y'] + bbox['height']],
+                data=[
+                    bbox['x'],
+                    bbox['y'],
+                    bbox['x'] + bbox['width'],
+                    bbox['y'] + bbox['height'],
+                ],
+                polygon_data=normalized_polygon,
                 annotation_uid=uid,
                 annotation_source=source,
                 confidence=confidence,
                 created_by=user,
-                updated_by=user
+                updated_by=user,
             )
             if not image.annotated:
                 image.annotated = True
-                image.status = 'annotated'
-                image.save(update_fields=['annotated', 'status'])
-                
+                image.status = "annotated"
+                image.save(update_fields=["annotated", "status"])
+
         return uid
     
     @sync_to_async

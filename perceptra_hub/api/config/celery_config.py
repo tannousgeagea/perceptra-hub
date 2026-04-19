@@ -49,6 +49,7 @@ class BaseConfig:
         Queue("kpi_computation"),  # KPI computation
         Queue("maintenance"),      # Maintenance tasks
         Queue("similarity"),       # Perceptual-similarity scans
+        Queue("seg_inference"),    # SAM auto-segmentation tasks
     )
     
     # Performance

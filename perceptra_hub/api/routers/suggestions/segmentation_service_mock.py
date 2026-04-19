@@ -88,7 +88,7 @@ class MockSegmentationService:
     # Same Public API as Real Service
     # ============================================================
 
-    def segment_from_points(
+    async def segment_from_points(
         self,
         image: np.ndarray,
         points: List[Tuple[float, float, int]],
@@ -96,7 +96,7 @@ class MockSegmentationService:
     ) -> SegmentationOutput:
         return self._create_output()
 
-    def segment_from_box(
+    async def segment_from_box(
         self,
         image: np.ndarray,
         box: Tuple[float, float, float, float],
@@ -104,7 +104,7 @@ class MockSegmentationService:
     ) -> SegmentationOutput:
         return self._create_output()
 
-    def segment_batch_boxes(
+    async def segment_batch_boxes(
         self,
         image: np.ndarray,
         boxes: List[Tuple[float, float, float, float]],
@@ -112,7 +112,7 @@ class MockSegmentationService:
     ) -> List[SegmentationOutput]:
         return [self._create_output() for _ in boxes]
 
-    def segment_from_text(
+    async def segment_from_text(
         self,
         image: np.ndarray,
         text: str,
@@ -120,7 +120,7 @@ class MockSegmentationService:
     ) -> List[SegmentationOutput]:
         return [self._create_output() for _ in range(2)]
 
-    def segment_from_exemplar(
+    async def segment_from_exemplar(
         self,
         image: np.ndarray,
         exemplar_box: Tuple[float, float, float, float],
@@ -128,7 +128,7 @@ class MockSegmentationService:
     ) -> List[SegmentationOutput]:
         return [self._create_output() for _ in range(3)]
 
-    def segment_text_and_box(
+    async def segment_text_and_box(
         self,
         image: np.ndarray,
         text: str,

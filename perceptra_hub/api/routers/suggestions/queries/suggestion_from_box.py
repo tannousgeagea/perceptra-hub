@@ -35,12 +35,12 @@ async def segment_from_box(
     
     image = await sug_svc.load_image(image_id)
     box = (request.box.x, request.box.y, request.box.width, request.box.height)
-    output = seg_svc.segment_from_box(
-        image, 
+    output = await seg_svc.segment_from_box(
+        image,
         box,
         model=session.model_name,
         device=session.model_device,
-        precision=session.model_precision
+        precision=session.model_precision,
     )
     
     suggestion = Suggestion(

@@ -40,7 +40,7 @@ async def segment_from_exemplar(
     
     # Get exemplar box from existing annotation or request
     if request.reference_annotation_uid:
-        ann = await sug_svc.get_annotation(request.reference_annotation_uid)
+        ann = await sug_svc._get_annotation(request.reference_annotation_uid)
         box = (ann.data[0], ann.data[1], 
                ann.data[2] - ann.data[0], ann.data[3] - ann.data[1])
         suggested_class_id = ann.annotation_class.class_id
@@ -50,12 +50,12 @@ async def segment_from_exemplar(
         suggested_class_id = None
         suggested_class_name = None
     
-    outputs = seg_svc.segment_from_exemplar(
-        image, 
+    outputs = await seg_svc.segment_from_exemplar(
+        image,
         box,
         model=session.model_name,
         device=session.model_device,
-        precision=session.model_precision 
+        precision=session.model_precision,
     )
     
     suggestions = [
