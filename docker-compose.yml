@@ -30,18 +30,6 @@ services:
       - postgres
       - redis
 
-  nginx:
-    image: nginx:latest
-    container_name: nginx
-    restart: unless-stopped
-    ports:
-      - "81:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
-      - /media/$user/cvision-mlops-media:/media
-    depends_on:
-      - perceptrahub
-
   # RabbitMQ Service
   rabbitmq:
     image: "rabbitmq:3-management-alpine"
