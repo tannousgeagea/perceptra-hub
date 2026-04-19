@@ -36,12 +36,12 @@ async def segment_from_text(
     session = await sug_svc.get_session(request.session_id)
 
     image = await sug_svc.load_image(image_id)
-    outputs = seg_svc.segment_from_text(
-        image, 
+    outputs = await seg_svc.segment_from_text(
+        image,
         request.text,
         model=session.model_name,
         device=session.model_device,
-        precision=session.model_precision
+        precision=session.model_precision,
     )
     
     suggestions = [

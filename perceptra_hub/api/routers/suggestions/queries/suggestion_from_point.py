@@ -41,13 +41,12 @@ async def segment_from_points(
     
     # Run segmentation
     points = [(p.x, p.y, p.label) for p in request.points]
-    output = seg_svc.segment_from_points(
-        image, 
+    output = await seg_svc.segment_from_points(
+        image,
         points,
         model=session.model_name,
         device=session.model_device,
-        precision=session.model_precision
-        
+        precision=session.model_precision,
     )
     
     suggestion = Suggestion(
