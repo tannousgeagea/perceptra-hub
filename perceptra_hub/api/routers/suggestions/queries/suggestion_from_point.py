@@ -50,7 +50,7 @@ async def segment_from_points(
     )
     
     suggestion = Suggestion(
-        id=session.pk,
+        id=str(session.pk),
         suggestion_id=str(uuid_lib.uuid4()),
         bbox=BoundingBox(x=output.bbox[0], y=output.bbox[1], 
                          width=output.bbox[2], height=output.bbox[3]),
