@@ -477,7 +477,60 @@ class AgentAPIKey(models.Model):
     def is_expired(self) -> bool:
         """Check if key is expired"""
         from django.utils import timezone
-        
+
         if not self.expires_at:
             return False
         return timezone.now() > self.expires_at
+
+
+class InferenceJob(models.Model):
+    """
+    Inference job dispatched to an on-premise agent.
+    The agent downloads the ONNX model, runs local inference, and posts predictions back.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+
+    job_id = models.CharField(max_length=255, unique=True)
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name='inference_jobs'
+    )
+    agent = models.ForeignKey(
+        Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='inference_jobs'
+    )
+    model_version = models.ForeignKey(
+        'ml_models.ModelVersion', on_delete=models.CASCADE, related_name='inference_jobs'
+    )
+    project = models.ForeignKey(
+        'projects.Project', on_delete=models.CASCADE, related_name='inference_jobs'
+    )
+    image_ids = models.JSONField(default=list)
+    confidence_threshold = models.FloatField(default=0.25)
+    onnx_presigned_url = models.TextField(blank=True)
+    onnx_url_expires_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    result_summary = models.JSONField(
+        default=dict, blank=True,
+        help_text=_('Counts of annotations created per class after completion')
+    )
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+
+    class Meta:
+        db_table = 'inference_job'
+        verbose_name_plural = 'Inference Jobs'
+        indexes = [
+            models.Index(fields=['organization', 'status']),
+        ]
+
+    def __str__(self):
+        return f"InferenceJob {self.job_id[:8]} status={self.status}"

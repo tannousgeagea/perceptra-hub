@@ -1,7 +1,10 @@
+import os
 import cv2
 import json
 import hashlib
 import numpy as np
+
+os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
 import albumentations as A
 from albumentations import CoarseDropout
 from pathlib import Path

@@ -84,6 +84,7 @@ def serialize_models(models):
     result = []
     for model in models:
         latest_version = model.get_latest_version()
+        production_version = model.get_production_version()
         result.append({
             "id": model.model_id,
             "name": model.name,
@@ -94,6 +95,8 @@ def serialize_models(models):
             "version_count": model.versions.filter(is_deleted=False).count(),
             "latest_version_number": latest_version.version_number if latest_version else None,
             "latest_status": latest_version.status if latest_version else None,
+            "has_production_version": production_version is not None,
+            "production_version_number": production_version.version_number if production_version else None,
             "created_at": model.created_at,
             "updated_at": model.updated_at
         })

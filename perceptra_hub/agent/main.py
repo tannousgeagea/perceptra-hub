@@ -47,6 +47,9 @@ OUTPUTS_DIR = WORK_DIR / 'outputs'
 shutdown_requested = False
 
 
+from agent.inference_executor import InferenceJobExecutor
+
+
 class AgentClient:
     """Client for communicating with platform API"""
     
@@ -81,7 +84,7 @@ class AgentClient:
             return False
     
     def poll_job(self) -> Optional[Dict[str, Any]]:
-        """Poll for next job"""
+        """Poll for next training job"""
         try:
             response = requests.get(
                 f'{self.api_url}/api/v1/agents/poll/job',
@@ -90,15 +93,30 @@ class AgentClient:
             )
             response.raise_for_status()
             data = response.json()
-            
-            # Check if job available
             if data.get('job_id'):
-                logger.info(f"Received job: {data['job_id']}")
+                logger.info(f"Received training job: {data['job_id']}")
                 return data
-            
             return None
         except Exception as e:
-            logger.error(f'Failed to poll for job: {e}')
+            logger.error(f'Failed to poll for training job: {e}')
+            return None
+
+    def poll_inference_job(self) -> Optional[Dict[str, Any]]:
+        """Poll for next inference job"""
+        try:
+            response = requests.get(
+                f'{self.api_url}/api/v1/agents/poll/inference-job',
+                headers=self.headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data.get('job_id'):
+                logger.info(f"Received inference job: {data['job_id']}")
+                return data
+            return None
+        except Exception as e:
+            logger.error(f'Failed to poll for inference job: {e}')
             return None
     
     def report_progress(
@@ -351,6 +369,7 @@ class Agent:
     def __init__(self):
         self.client = AgentClient(API_URL, AGENT_KEY, AGENT_SECRET)
         self.executor = JobExecutor(self.client)
+        self.inference_executor = InferenceJobExecutor(self.client)
         self.monitor = SystemMonitor()
         self.last_heartbeat = 0
         self.current_job = None
@@ -377,15 +396,17 @@ class Agent:
                     status = 'busy' if self.current_job else 'ready'
                     self._send_heartbeat(status)
                 
-                # Poll for job if not busy
+                # Poll for jobs if not busy
                 if not self.current_job:
                     job = self.client.poll_job()
-                    
                     if job:
                         self._execute_job(job)
                     else:
-                        # No job available, wait
-                        time.sleep(POLL_INTERVAL)
+                        inf_job = self.client.poll_inference_job()
+                        if inf_job:
+                            self._execute_inference_job(inf_job)
+                        else:
+                            time.sleep(POLL_INTERVAL)
                 else:
                     # Job in progress, wait
                     time.sleep(1)
@@ -437,6 +458,22 @@ class Agent:
         finally:
             self.current_job = None
     
+    def _execute_inference_job(self, job: Dict[str, Any]):
+        """Execute inference job on local GPU"""
+        job_id = job['job_id']
+        self.current_job = job_id
+        try:
+            logger.info(f'Executing inference job: {job_id}')
+            success, summary, error = self.inference_executor.execute(job)
+            if not success:
+                logger.error(f'Inference job {job_id} failed: {error}')
+            else:
+                logger.info(f'Inference job {job_id} done: {summary}')
+        except Exception as e:
+            logger.error(f'Failed to execute inference job: {e}', exc_info=True)
+        finally:
+            self.current_job = None
+
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
         global shutdown_requested

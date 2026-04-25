@@ -123,11 +123,7 @@ async def create_model(
     
     # Create model
     model = await create_model_in_db(
-        RequestContext(
-            user=project_ctx.user,
-            organization=project_ctx.organization,
-            role=project_ctx.org_role
-        ),
+        project_ctx._org_ctx,
         project_ctx.project,
         data
     )

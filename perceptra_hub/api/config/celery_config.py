@@ -50,6 +50,8 @@ class BaseConfig:
         Queue("maintenance"),      # Maintenance tasks
         Queue("similarity"),       # Perceptual-similarity scans
         Queue("seg_inference"),    # SAM auto-segmentation tasks
+        Queue("auto_annotate"),    # Model-based auto-annotation
+        Queue("evaluation"),       # Champion/challenger evaluation
     )
     
     # Performance
@@ -166,6 +168,13 @@ class BaseConfig:
         'task': 'api.tasks.evaluation.metric_snapshot.create_daily_snapshots',
         'schedule': crontab(hour=2, minute=0),  # 2 AM daily
         'options': {'expires': 3600}  # Task expires after 1 hour
+    },
+
+    # Continuous training loop: evaluate retraining policies every hour
+    'evaluate-retraining-policies': {
+        'task': 'api.tasks.retraining.evaluate_retraining_policies',
+        'schedule': crontab(minute=0),   # Every hour on the hour
+        'options': {'queue': 'activity'},
     },
 }
 
