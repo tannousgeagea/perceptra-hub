@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from common_utils.azure_manager.core import AzureManager
 from django.core.files.storage import default_storage
 
-REMOTE_INFERENCE_URL = os.getenv("REMOTE_INFERENCE_URL")
+INFERENCE_SERVICE_URL = os.getenv("INFERENCE_SERVICE_URL", os.getenv("REMOTE_INFERENCE_URL", ""))
 
 def run_inference(image:str, model_version_id:str, confidence_threshold:float=0.25):
     with default_storage.open(image, "rb") as f:
@@ -15,7 +15,7 @@ def run_inference(image:str, model_version_id:str, confidence_threshold:float=0.
         params = {
             "confidence_threshold": confidence_threshold,
         }
-        response = requests.post(f"{REMOTE_INFERENCE_URL}/api/v1/infer/{model_version_id}", files=files, params=params)
+        response = requests.post(f"{INFERENCE_SERVICE_URL}/v1/infer/{model_version_id}", files=files, params=params)
    
     if response.status_code != 200:
         raise HTTPException(status_code=500, detail=f"Error in inference service: {response.text}")

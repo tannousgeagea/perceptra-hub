@@ -142,7 +142,10 @@ def train_model_on_platform_gpu(
         model_version.metrics = result.best_metrics.to_dict()
         model_version.status = 'trained'
         model_version.save()
-        
+
+        # Automatically trigger champion/challenger evaluation
+        _trigger_champion_challenger(model_version)
+
         # 11. Mark training session complete
         training_session.status = 'completed'
         training_session.completed_at = timezone.now()
@@ -362,6 +365,42 @@ def upload_onnx(onnx_path: Path, model_version, storage_profile):
     
     logger.info(f"Uploaded ONNX model to storage: {storage_key}")
     return storage_key
+
+
+def _trigger_champion_challenger(model_version) -> None:
+    """Fire champion/challenger evaluation after training completes."""
+    import uuid as _uuid
+    try:
+        from inferences.models import ModelEvaluation
+        from api.tasks.champion_challenger import run_champion_challenger_evaluation
+
+        champion = model_version.model.get_production_version()
+        dataset_version = model_version.dataset_version
+        if dataset_version is None:
+            logger.warning(
+                "No dataset_version on model_version %s — skipping evaluation",
+                model_version.version_id,
+            )
+            return
+
+        evaluation = ModelEvaluation.objects.create(
+            evaluation_id=str(_uuid.uuid4()),
+            challenger=model_version,
+            champion=champion,
+            dataset_version=dataset_version,
+        )
+        run_champion_challenger_evaluation.apply_async(
+            kwargs={"evaluation_id": evaluation.evaluation_id},
+            queue="evaluation",
+            countdown=30,
+        )
+        logger.info(
+            "Champion/challenger evaluation queued: evaluation_id=%s challenger=%s champion=%s",
+            evaluation.evaluation_id, model_version.version_id,
+            champion.version_id if champion else None,
+        )
+    except Exception as e:
+        logger.warning("Failed to trigger champion/challenger evaluation: %s", e)
 
 
 def cleanup_temp_files(*paths):

@@ -6,6 +6,8 @@ from django.utils.translation import gettext_lazy as _
 
 User = get_user_model()
 
+import uuid as _uuid_module
+
 
 class TrainingSession(models.Model):
     """
@@ -328,3 +330,87 @@ class TrainingCheckpoint(models.Model):
             method='GET'
         )
         return presigned.url
+
+class RetrainingPolicy(models.Model):
+    """
+    Defines when to automatically trigger a new training run for a model.
+    Evaluated hourly by the evaluate_retraining_policies Celery Beat task.
+    """
+    TRIGGER_CHOICES = [
+        ('annotation_count', 'New Annotation Count'),
+        ('correction_rate', 'Prediction Correction Rate'),
+        ('time_elapsed', 'Time Since Last Training'),
+        ('combined', 'Combined Conditions'),
+    ]
+
+    policy_id = models.CharField(
+        max_length=255, unique=True,
+        default=_uuid_module.uuid4,
+        editable=False,
+        help_text=_('Unique identifier for this retraining policy')
+    )
+    model = models.ForeignKey(
+        'ml_models.Model', on_delete=models.CASCADE, related_name='retraining_policies'
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+    trigger_type = models.CharField(
+        max_length=30, choices=TRIGGER_CHOICES, default='annotation_count'
+    )
+
+    # Thresholds
+    min_new_annotations = models.PositiveIntegerField(
+        default=100,
+        help_text=_('Retrain when this many new reviewed annotations accumulate')
+    )
+    min_correction_rate = models.FloatField(
+        null=True, blank=True,
+        help_text=_('Retrain when FP+FN rate exceeds this fraction (0–1)')
+    )
+    max_days_since_training = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text=_('Retrain if the latest trained version is older than N days')
+    )
+    lookback_days = models.PositiveIntegerField(
+        default=30,
+        help_text=_('Count new annotations within this rolling window (days)')
+    )
+
+    # Action when triggered
+    auto_create_dataset_version = models.BooleanField(
+        default=True,
+        help_text=_('Automatically snapshot current annotations into a new dataset version')
+    )
+    auto_submit_training = models.BooleanField(
+        default=True,
+        help_text=_('Automatically submit a new training job after creating the dataset version')
+    )
+    compute_profile = models.ForeignKey(
+        'compute.ComputeProfile', on_delete=models.SET_NULL, null=True, blank=True,
+        help_text=_('Compute profile to use for the triggered training run')
+    )
+
+    # Anti-spam guard
+    min_hours_between_runs = models.PositiveIntegerField(
+        default=24,
+        help_text=_('Minimum hours between two automatic retraining runs')
+    )
+    last_triggered_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text=_('Timestamp of the last automatic retraining trigger')
+    )
+
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'retraining_policy'
+        verbose_name_plural = 'Retraining Policies'
+        indexes = [
+            models.Index(fields=['model', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"RetrainingPolicy({self.trigger_type}) for {self.model.name}"

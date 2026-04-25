@@ -384,7 +384,7 @@ async def mark_image_as_null(
                     is_active=True
                 ).update(
                     is_active=False, 
-                    is_delete=True,
+                    is_deleted=True,
                     deleted_by=user,
                     deleted_at=timezone.now()
                 )
@@ -496,7 +496,7 @@ async def bulk_mark_images_as_null(
                             is_active=True
                         ).update(
                             is_active=False,
-                            is_delete=True,
+                            is_deleted=True,
                             deleted_by=user,
                             deleted_at=now
                         )

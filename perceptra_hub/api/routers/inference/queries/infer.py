@@ -31,7 +31,7 @@ class TimedRoute(APIRoute):
         return custom_route_handler
 
 
-REMOTE_INFERENCE_URL = os.getenv("REMOTE_INFERENCE_URL")
+INFERENCE_SERVICE_URL = os.getenv("INFERENCE_SERVICE_URL", os.getenv("REMOTE_INFERENCE_URL", ""))
 
 router = APIRouter(
     route_class=TimedRoute,
@@ -52,7 +52,7 @@ async def infer(
             "confidence_threshold": confidence_threshold,
             "max_detections": max_detections,
     }
-    response = requests.post(f"{REMOTE_INFERENCE_URL}/api/v1/infer/{model_version_id}", files=files, params=params)
+    response = requests.post(f"{INFERENCE_SERVICE_URL}/v1/infer/{model_version_id}", files=files, params=params)
     
     if response.status_code != 200:
         raise HTTPException(status_code=500, detail=f"Error in inference service: {response.text}")
