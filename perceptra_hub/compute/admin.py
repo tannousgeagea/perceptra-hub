@@ -5,7 +5,15 @@ Location: compute/admin.py
 from django.contrib import admin
 from unfold.admin import ModelAdmin
 from django.utils.html import format_html
-from .models import ComputeProvider, ComputeProfile, ComputeFallback, TrainingJob, Agent
+from .models import (
+    ComputeProvider, 
+    ComputeProfile, 
+    ComputeFallback, 
+    TrainingJob, 
+    Agent,
+    AgentAPIKey,
+    InferenceJob
+)
 
 
 @admin.register(ComputeProvider)
@@ -308,3 +316,177 @@ class AgentAdmin(ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         return qs.select_related('organization')
+    
+@admin.register(AgentAPIKey)
+class AgentAPIKeyAdmin(ModelAdmin):
+    list_display = (
+        'name',
+        'key_id_short',
+        'organization',
+        'agent',
+        'is_active',
+        'is_expired_display',
+        'last_used',
+        'created_at',
+    )
+    
+    list_filter = (
+        'is_active',
+        'organization',
+        'agent',
+        'created_at',
+        'expires_at',
+    )
+    
+    search_fields = (
+        'name',
+        'key_id',
+        'organization__name',
+        'agent__name',
+    )
+    
+    readonly_fields = (
+        'key_id',
+        'key_hash',
+        'last_used',
+        'created_at',
+        'is_expired_display',
+    )
+    
+    autocomplete_fields = ('organization', 'agent', 'created_by')
+    
+    ordering = ('-created_at',)
+    
+    fieldsets = (
+        ('Key Info', {
+            'fields': ('name', 'key_id', 'key_hash')
+        }),
+        ('Ownership', {
+            'fields': ('organization', 'agent', 'created_by')
+        }),
+        ('Status', {
+            'fields': ('is_active', 'expires_at', 'is_expired_display')
+        }),
+        ('Usage', {
+            'fields': ('last_used', 'created_at')
+        }),
+    )
+
+    def key_id_short(self, obj):
+        return obj.key_id[:12] + '...'
+    key_id_short.short_description = 'Key ID'
+
+    def is_expired_display(self, obj):
+        if obj.is_expired:
+            return format_html('<span style="color:red;">Expired</span>')
+        return format_html('<span style="color:green;">Valid</span>')
+    is_expired_display.short_description = 'Expiration Status'
+
+@admin.register(InferenceJob)
+class InferenceJobAdmin(ModelAdmin):
+    list_display = (
+        'job_id_short',
+        'organization',
+        'agent',
+        'model_version',
+        'status_colored',
+        'created_at',
+        'started_at',
+        'completed_at',
+        'duration',
+    )
+    
+    list_filter = (
+        'status',
+        'organization',
+        'agent',
+        'model_version',
+        'created_at',
+    )
+    
+    search_fields = (
+        'job_id',
+        'organization__name',
+        'agent__name',
+        'model_version__name',
+    )
+    
+    readonly_fields = (
+        'job_id',
+        'created_at',
+        'started_at',
+        'completed_at',
+        'duration',
+    )
+    
+    autocomplete_fields = (
+        'organization',
+        'agent',
+        'model_version',
+        'project',
+        'created_by',
+    )
+    
+    ordering = ('-created_at',)
+    
+    fieldsets = (
+        ('Core Info', {
+            'fields': (
+                'job_id',
+                'status',
+                'organization',
+                'agent',
+                'project',
+                'model_version',
+            )
+        }),
+        ('Input', {
+            'fields': (
+                'image_ids',
+                'confidence_threshold',
+            )
+        }),
+        ('ONNX Model', {
+            'fields': (
+                'onnx_presigned_url',
+                'onnx_url_expires_at',
+            )
+        }),
+        ('Results', {
+            'fields': (
+                'result_summary',
+                'error_message',
+            )
+        }),
+        ('Timing', {
+            'fields': (
+                'created_at',
+                'started_at',
+                'completed_at',
+                'duration',
+            )
+        }),
+    )
+
+    # --- Custom display methods ---
+
+    def job_id_short(self, obj):
+        return obj.job_id[:8]
+    job_id_short.short_description = 'Job ID'
+
+    def status_colored(self, obj):
+        color_map = {
+            'pending': 'gray',
+            'running': 'blue',
+            'completed': 'green',
+            'failed': 'red',
+        }
+        color = color_map.get(obj.status, 'black')
+        return format_html(f'<span style="color:{color}; font-weight:bold;">{obj.status}</span>')
+    status_colored.short_description = 'Status'
+
+    def duration(self, obj):
+        if obj.started_at and obj.completed_at:
+            return obj.completed_at - obj.started_at
+        return "-"
+    duration.short_description = 'Duration'

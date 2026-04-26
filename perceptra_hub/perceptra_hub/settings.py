@@ -361,6 +361,61 @@ UNFOLD = {
                 ],
             },
             {
+                "title": _("Computes"),
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": _("Compute Providers"),
+                        "icon": "computer",
+                        "link": reverse_lazy(
+                            "admin:compute_computeprovider_changelist"
+                            ),
+                    },
+                    {
+                        "title": _("Compute Profiles"),
+                        "icon": "admin_panel_settings",
+                        "link": reverse_lazy(
+                            "admin:compute_computeprofile_changelist"
+                            ),
+                    },
+                    {
+                        "title": _("Compute Fallbacks"),
+                        "icon": "falling",
+                        "link": reverse_lazy(
+                            "admin:compute_computefallback_changelist"
+                            ),
+                    },
+                    {
+                        "title": _("Training Jobs"),
+                        "icon": "directions_run",
+                        "link": reverse_lazy(
+                            "admin:compute_trainingjob_changelist"
+                            ),
+                    },
+                    {
+                        "title": _("Agent Pools"),
+                        "icon": "support_agent",
+                        "link": reverse_lazy(
+                            "admin:compute_agent_changelist"
+                            ),
+                    },
+                    {
+                        "title": _("Agent Credentials"),
+                        "icon": "key",
+                        "link": reverse_lazy(
+                            "admin:compute_agentapikey_changelist"
+                            ),
+                    },
+                    {
+                        "title": _("Inference Jobs"),
+                        "icon": "batch_prediction",
+                        "link": reverse_lazy(
+                            "admin:compute_inferencejob_changelist"
+                            ),
+                    },
+                ],
+            },
+            {
                 "title": _("Memberships"),
                 "collapsible": True,
                 "items": [

@@ -97,6 +97,7 @@ def serialize_models(models):
             "latest_status": latest_version.status if latest_version else None,
             "has_production_version": production_version is not None,
             "production_version_number": production_version.version_number if production_version else None,
+            "production_version_id": production_version.version_id if production_version else None,
             "created_at": model.created_at,
             "updated_at": model.updated_at
         })
