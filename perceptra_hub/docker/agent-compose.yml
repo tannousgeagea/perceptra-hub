@@ -6,26 +6,27 @@ services:
       context: ..
       dockerfile: docker/agent.Dockerfile
     container_name: cv-training-agent
+    image: tannousgeagea/perceptra-agent:latest
     restart: unless-stopped
     
-    # GPU access
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # # GPU access
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
     
     # Environment variables (override with .env file)
-    # environment:
-    #   - API_URL=${API_URL}
-    #   - AGENT_KEY=${AGENT_KEY}
-    #   - AGENT_SECRET=${AGENT_SECRET}
-    #   - AGENT_ID=${AGENT_ID}
-    #   - POLL_INTERVAL=${POLL_INTERVAL:-10}
-    #   - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-30}
-    #   - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+    environment:
+      - API_URL=${API_URL}
+      - AGENT_KEY=${AGENT_KEY}
+      - AGENT_SECRET=${AGENT_SECRET}
+      - AGENT_ID=${AGENT_ID}
+      - POLL_INTERVAL=${POLL_INTERVAL:-10}
+      - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-30}
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
     
     # Volumes for persistent data
     volumes:
@@ -33,7 +34,7 @@ services:
       - agent-outputs:/tmp/agent-work/outputs
       # Optional: Mount local datasets
       # - /path/to/your/datasets:/tmp/agent-work/datasets
-    env_file: ../agent/.env
+    env_file: .env
 
     # Logging
     logging:

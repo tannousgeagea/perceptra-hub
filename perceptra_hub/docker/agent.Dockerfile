@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime
 
 # Install Python 3.11
 RUN apt-get update && apt-get install -y \
@@ -17,7 +17,7 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
 RUN pip3 install --upgrade pip
 
 # Install PyTorch with CUDA 12.1
-RUN pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+RUN pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 
 # Install training frameworks
 RUN pip3 install ultralytics==8.3.0  # YOLO

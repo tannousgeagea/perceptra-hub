@@ -58,7 +58,8 @@ def get_task_progress(task_id: str):
         "percentage": progress.get("percentage", 0),
         "message": progress.get("message", ""),
         "status": progress.get("status", "idle"),
+        "isComplete": progress.get("isComplete", False),
         "timeRemaining": progress.get("time_remaining"),
         "startTime": progress.get("start_time"),
-        "lastUpdated": progress.get("last_updated")
+        "lastUpdated": progress.get("last_updated"),
     }
