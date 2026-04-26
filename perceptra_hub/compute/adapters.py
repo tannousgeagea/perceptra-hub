@@ -1265,18 +1265,35 @@ class OnPremiseAgentAdapter(BaseComputeAdapter):
         
         # Get organization
         org_id = job_config['organization_id']
-        
-        # Find available agent
-        agent = AgentManager.get_available_agent(
-            organization_id=org_id,
-            required_gpus=job_config.get('gpu_count', 1)
-        )
-        
-        if not agent:
-            raise RuntimeError(
-                f"No available agents for organization {org_id}. "
-                "Please register an agent or wait for existing agents to become available."
+        requested_agent_id = job_config.get('agent_id')
+
+        if requested_agent_id:
+            # User selected a specific agent — look it up directly
+            try:
+                agent = Agent.objects.get(
+                    agent_id=requested_agent_id,
+                    organization__org_id=org_id,
+                )
+                if not agent.is_online:
+                    raise RuntimeError(
+                        f"Agent {agent.name} ({requested_agent_id}) is offline. "
+                        "Select a different agent or remove the agent selection to auto-assign."
+                    )
+            except Agent.DoesNotExist:
+                raise RuntimeError(
+                    f"Agent {requested_agent_id} not found for this organization."
+                )
+        else:
+            # Auto-select an available agent
+            agent = AgentManager.get_available_agent(
+                organization_id=org_id,
+                required_gpus=job_config.get('gpu_count', 1)
             )
+            if not agent:
+                raise RuntimeError(
+                    f"No available agents for organization {org_id}. "
+                    "Please register an agent or wait for existing agents to become available."
+                )
         
         logger.info(f"Selected agent {agent.agent_id} for job {job_config['job_id']}")
         

@@ -40,7 +40,8 @@ class TrainingOrchestrator:
     def submit_training(
         self,
         training_session: TrainingSession,
-        compute_profile_id: Optional[str] = None
+        compute_profile_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ) -> TrainingJob:
         """
         Submit training job to appropriate compute resource.
@@ -99,7 +100,8 @@ class TrainingOrchestrator:
             external_job_id = self._submit_to_provider(
                 provider,
                 training_job,
-                compute_profile
+                compute_profile,
+                agent_id=agent_id,
             )
             
             # Update with external ID
@@ -369,7 +371,8 @@ class TrainingOrchestrator:
         self,
         provider: ComputeProvider,
         training_job: TrainingJob,
-        compute_profile: ComputeProfile
+        compute_profile: ComputeProfile,
+        agent_id: Optional[str] = None,
     ) -> str:
         """
         Submit job to specific provider using appropriate adapter.
@@ -393,10 +396,11 @@ class TrainingOrchestrator:
             'framework': self.model.framework.name,
             'task': self.model.task.name,
             'parent_version_id': (
-                self.model_version.parent_version.version_id 
-                if self.model_version.parent_version 
+                self.model_version.parent_version.version_id
+                if self.model_version.parent_version
                 else None
-            )
+            ),
+            'agent_id': agent_id,
         }
         
         # Decrypt credentials if needed
