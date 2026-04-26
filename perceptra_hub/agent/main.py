@@ -177,24 +177,63 @@ class AgentClient:
             logger.error(f'Failed to report completion: {e}')
             return False
     
-    def download_dataset(self, dataset_version_id: str, storage_profile_id: str, output_path: Path) -> bool:
-        """Download dataset from storage"""
-        # TODO: Implement dataset download from storage
-        # For now, assume dataset is pre-downloaded or accessible
-        logger.warning('Dataset download not implemented, assuming data exists')
-        return True
-    
+    def download_dataset(
+        self,
+        dataset_version_id: str,
+        storage_profile_id: str,
+        output_path: Path,
+        presigned_url: Optional[str] = None  # unused, kept for call-site compat
+    ) -> bool:
+        """Stream dataset zip from platform API and extract. Works for all storage backends."""
+        try:
+            logger.info('Downloading dataset from platform...')
+            resp = requests.get(
+                f'{self.api_url}/api/v1/agents/datasets/{dataset_version_id}/download',
+                headers=self.headers,
+                stream=True,
+                timeout=300
+            )
+            resp.raise_for_status()
+            zip_path = output_path / 'dataset.zip'
+            with open(zip_path, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=65536):
+                    f.write(chunk)
+            logger.info(f'Dataset downloaded ({zip_path.stat().st_size} bytes), extracting...')
+            import zipfile
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                zf.extractall(output_path)
+            zip_path.unlink()
+            logger.info(f'Dataset ready at: {output_path}')
+            return True
+        except Exception as e:
+            logger.error(f'Dataset download failed: {e}')
+            return False
+
     def upload_artifact(
         self,
         file_path: Path,
         storage_key: str,
         storage_profile_id: str
     ) -> bool:
-        """Upload training artifact to storage"""
-        # TODO: Implement artifact upload to storage
-        # For now, just log
-        logger.warning(f'Artifact upload not implemented: {storage_key}')
-        return True
+        """Upload artifact directly to platform API. Works for all storage backends."""
+        try:
+            logger.info(f'Uploading artifact: {storage_key} ({file_path.stat().st_size} bytes)')
+            # Exclude Content-Type so requests can set multipart boundary correctly
+            upload_headers = {k: v for k, v in self.headers.items() if k.lower() != 'content-type'}
+            with open(file_path, 'rb') as f:
+                resp = requests.post(
+                    f'{self.api_url}/api/v1/agents/artifacts/upload',
+                    headers=upload_headers,
+                    files={'file': (file_path.name, f, 'application/octet-stream')},
+                    params={'key': storage_key, 'storage_profile_id': storage_profile_id},
+                    timeout=600
+                )
+            resp.raise_for_status()
+            logger.info(f'Artifact uploaded: {storage_key}')
+            return True
+        except Exception as e:
+            logger.error(f'Artifact upload failed ({storage_key}): {e}')
+            return False
 
 
 class SystemMonitor:
@@ -310,42 +349,30 @@ class JobExecutor:
             
             # Upload artifacts
             artifacts = {}
-            
-            if result.get('checkpoint_path'):
-                checkpoint_path = Path(result['checkpoint_path'])
-                if checkpoint_path.exists():
-                    storage_key = f"organizations/{job['organization_id']}/models/{job['model_version_id']}/checkpoint.pt"
-                    if self.client.upload_artifact(
-                        checkpoint_path,
-                        storage_key,
-                        job['storage_profile_id']
-                    ):
-                        artifacts['checkpoint_key'] = storage_key
-            
-            if result.get('onnx_path'):
-                onnx_path = Path(result['onnx_path'])
-                if onnx_path.exists():
-                    storage_key = f"organizations/{job['organization_id']}/models/{job['model_version_id']}/model.onnx"
-                    if self.client.upload_artifact(
-                        onnx_path,
-                        storage_key,
-                        job['storage_profile_id']
-                    ):
-                        artifacts['onnx_key'] = storage_key
-            
+            storage_profile_id = job['storage_profile_id']
+            org_id = job['organization_id']
+            mv_id = job['model_version_id']
+
+            if result.best_checkpoint_path and Path(result.best_checkpoint_path).exists():
+                storage_key = f"organizations/{org_id}/models/{mv_id}/checkpoint.pt"
+                if self.client.upload_artifact(Path(result.best_checkpoint_path), storage_key, storage_profile_id):
+                    artifacts['checkpoint_key'] = storage_key
+
+            if result.onnx_path and Path(result.onnx_path).exists():
+                storage_key = f"organizations/{org_id}/models/{mv_id}/model.onnx"
+                if self.client.upload_artifact(Path(result.onnx_path), storage_key, storage_profile_id):
+                    artifacts['onnx_key'] = storage_key
+
             # Training logs
             logs_path = job_work_dir / 'training.log'
             if logs_path.exists():
-                storage_key = f"organizations/{job['organization_id']}/models/{job['model_version_id']}/training.log"
-                if self.client.upload_artifact(
-                    logs_path,
-                    storage_key,
-                    job['storage_profile_id']
-                ):
+                storage_key = f"organizations/{org_id}/models/{mv_id}/training.log"
+                if self.client.upload_artifact(logs_path, storage_key, storage_profile_id):
                     artifacts['logs_key'] = storage_key
-            
+
+            final_metrics = result.best_metrics.to_dict() if result.best_metrics else {}
             logger.info(f'Job {job_id} completed successfully')
-            return True, artifacts, result.get('metrics', {}), None
+            return True, artifacts, final_metrics, None
             
         except Exception as e:
             error_msg = f"Training failed: {str(e)}"

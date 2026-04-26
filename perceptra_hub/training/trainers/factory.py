@@ -69,6 +69,7 @@ def _register_builtin_trainers():
     """Register built-in trainers"""
     try:
         from .yolo_trainer import YOLOTrainer
+        TrainerRegistry.register('ultralytics')(YOLOTrainer)
         TrainerRegistry.register('yolo')(YOLOTrainer)
         TrainerRegistry.register('yolov8')(YOLOTrainer)
         TrainerRegistry.register('yolov9')(YOLOTrainer)

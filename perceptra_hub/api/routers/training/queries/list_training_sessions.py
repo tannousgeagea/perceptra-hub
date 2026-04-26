@@ -18,6 +18,7 @@ class TrainingSessionOut(BaseModel):
     updatedAt: str
     progress: float
     metrics: Optional[dict]
+    best_metrics: Optional[dict]
     configuration: Optional[dict]
     logs: Optional[List[str]]
 
@@ -39,7 +40,7 @@ def list_training_sessions(
         )
 
         if project_id:
-            queryset = queryset.filter(model_version__model__project__name__icontains=project_id)
+            queryset = queryset.filter(model_version__model__project__project_id=project_id)
 
         if model_id:
             queryset = queryset.filter(model_version__model__name__icontains=model_id)
@@ -59,10 +60,10 @@ def list_training_sessions(
             model = mv.model
             project = model.project
 
-            if isinstance(session.metrics, list):
-                metrics = session.metrics[-1]
+            if isinstance(session.current_metrics, list):
+                metrics = session.current_metrics[-1]
             else:
-                metrics = session.metrics
+                metrics = session.current_metrics
             
             results.append(TrainingSessionOut(
                 id=str(session.id),
@@ -73,8 +74,9 @@ def list_training_sessions(
                 updatedAt=localtime(session.updated_at).isoformat(),
                 progress=session.progress,
                 metrics=metrics,
+                best_metrics=session.best_metrics,
                 configuration=session.config,
-                logs=session.logs.splitlines() if session.logs else []
+                logs=session.log_summary.splitlines() if session.log_summary else []
             ))
 
         return {"total": total, "results": results}

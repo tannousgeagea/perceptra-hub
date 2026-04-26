@@ -30,7 +30,7 @@ RUN pip3 install \
     psutil==5.9.8 \
     pyyaml==6.0.1 \
     pillow==10.3.0 \
-    opencv-python==4.9.0.80 \
+    opencv-python-headless==4.9.0.80 \
     numpy==1.26.4 \
     pandas==2.2.2
 

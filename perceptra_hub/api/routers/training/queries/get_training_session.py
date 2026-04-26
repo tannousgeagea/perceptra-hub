@@ -54,10 +54,10 @@ def get_training_session(session_id: int) -> TrainingSessionOut:
         model = mv.model
         project = model.project
 
-        if isinstance(session.metrics, list):
-            metrics = session.metrics[-1]
+        if isinstance(session.current_metrics, list):
+            metrics = session.current_metrics[-1]
         else:
-            metrics = session.metrics
+            metrics = session.current_metrics
             
         return TrainingSessionOut(
                 id=str(session.id),
@@ -69,17 +69,17 @@ def get_training_session(session_id: int) -> TrainingSessionOut:
                 progress=session.progress,
                 metrics=metrics,
                 configuration=session.config,
-                logs=session.logs.splitlines() if session.logs else [],
+                logs=session.log_summary.splitlines() if session.log_summary else [],
                 model_version={
                     "id": mv.id,
-                    "version": mv.version,
+                    "version": mv.version_name,
                 },
                 metricsData=[
                     {
                         "epoch": i + 1,
                         **met,
-                    } for i, met in enumerate(session.metrics)
-                ],
+                    } for i, met in enumerate(session.current_metrics) if isinstance(session.current_metrics, list)
+                ] if session.current_metrics and isinstance(session.current_metrics, list) else None
             )
     except TrainingSession.DoesNotExist:
         raise HTTPException(404, "Session not found")

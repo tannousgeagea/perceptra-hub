@@ -170,15 +170,27 @@ class BaseTrainer(ABC):
         self.task = task
         self.config = config
         self.callbacks = callbacks or TrainingCallbacks()
-        
+        self._progress_callback: Optional[Callable] = None
+
         # Create output directory
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Setup logging
         self._setup_logging()
         
         logger.info(f"Initialized {self.__class__.__name__} for task: {task}")
     
+    def set_progress_callback(self, callback: Callable) -> None:
+        """Register a callback invoked after each epoch: callback(epoch, total_epochs, metrics_dict)."""
+        self._progress_callback = callback
+
+    def _call_progress(self, epoch: int, total_epochs: int, metrics: dict) -> None:
+        if self._progress_callback:
+            try:
+                self._progress_callback(epoch, total_epochs, metrics)
+            except Exception as e:
+                logger.warning(f"Progress callback error: {e}")
+
     def _setup_logging(self):
         """Setup logging to file"""
         log_file = self.config.output_dir / 'training.log'
@@ -330,7 +342,8 @@ class BaseTrainer(ABC):
             
             self.callbacks.on_checkpoint_saved(epoch, checkpoint_path, is_best)
             self.callbacks.on_epoch_end(epoch, train_metrics)
-            
+            self._call_progress(epoch, self.config.epochs, train_metrics.to_dict())
+
             # Early stopping
             if self.config.patience and epoch > self.config.patience:
                 # Simple early stopping: check if no improvement in last N epochs

@@ -612,6 +612,13 @@ class Version(TimeStampedModel):
         """
         from storage.services import get_storage_adapter_for_profile
         
+        if self.storage_profile.backend == "local":
+            from api.routers.images.queries.media import _media_url
+            return _media_url(
+                storage_backend='local',
+                storage_key=f"{self.storage_profile.config['base_path']}/{self.storage_key}"
+            )
+
         adapter = get_storage_adapter_for_profile(self.storage_profile)
         presigned = adapter.generate_presigned_url(
             self.storage_key,

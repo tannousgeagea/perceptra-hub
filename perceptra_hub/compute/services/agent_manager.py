@@ -194,25 +194,30 @@ class AgentManager:
             Job assignment dict
         """
         import json
-        
-        # Build job config
+        import uuid as _uuid
+
+        def _str(v):
+            return str(v) if v is not None else None
+
+        # Build job config — all IDs coerced to str for JSON serialization
         job_assignment = {
             'job_id': training_job.job_id,
-            'training_session_id': training_job.training_session.session_id,
-            'model_version_id': training_job.training_session.model_version.version_id,
-            'organization_id': training_job.training_session.model_version.model.organization.org_id,
+            'training_session_id': _str(training_job.training_session.session_id),
+            'model_version_id': _str(training_job.training_session.model_version.version_id),
+            'organization_id': _str(training_job.training_session.model_version.model.organization.org_id),
             'framework': training_job.training_session.model_version.model.framework.name,
             'task': training_job.training_session.model_version.model.task.name,
             'config': training_job.training_session.config,
-            'dataset_version_id': training_job.training_session.model_version.dataset_version.id if training_job.training_session.model_version.dataset_version else None,
-            'storage_profile_id': training_job.training_session.model_version.storage_profile.storage_profile_id,
+            'dataset_version_id': _str(training_job.training_session.model_version.dataset_version.version_id)
+                if training_job.training_session.model_version.dataset_version else None,
+            'storage_profile_id': _str(training_job.training_session.model_version.storage_profile.storage_profile_id),
             'assigned_at': timezone.now().isoformat(),
-            'agent_id': agent.agent_id
+            'agent_id': _str(agent.agent_id),
         }
-        
-        # Store in Redis for agent to pick up
+
+        # Store in Redis for agent to pick up (serialized as JSON string)
         assignment_key = cls.JOB_ASSIGNMENT_KEY.format(job_id=training_job.job_id)
-        cache.set(assignment_key, job_assignment, timeout=86400)  # 24 hours
+        cache.set(assignment_key, json.dumps(job_assignment), timeout=86400)  # 24 hours
         
         # Add to agent's job queue
         queue_key = f"agent:{agent.agent_id}:jobs"
@@ -294,12 +299,15 @@ class AgentManager:
         
         # Get job assignment
         assignment_key = cls.JOB_ASSIGNMENT_KEY.format(job_id=job_id)
-        assignment = cache.get(assignment_key)
-        
-        if not assignment:
+        raw = cache.get(assignment_key)
+
+        if not raw:
             logger.error(f"Job assignment not found for {job_id}")
             return None
-        
+
+        import json
+        assignment = json.loads(raw) if isinstance(raw, str) else raw
+
         logger.info(f"Agent {agent.agent_id} claimed job {job_id}")
         return assignment
     
@@ -384,11 +392,12 @@ class AgentManager:
                 session.status = 'completed' if success else 'failed'
                 session.progress = 100.0 if success else session.progress
                 session.completed_at = timezone.now()
-                session.metrics = {**session.metrics, **final_metrics}
-                
+                if final_metrics:
+                    session.current_metrics = {**(session.current_metrics or {}), **final_metrics}
+
                 if error:
                     session.error_message = error
-                
+
                 session.save()
                 
                 # Update model version with artifacts
