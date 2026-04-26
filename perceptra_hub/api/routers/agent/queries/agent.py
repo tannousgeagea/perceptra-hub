@@ -3,7 +3,9 @@ Agent Management API Endpoints
 File: api/routers/agents.py
 """
 from os import getenv as env
-from fastapi import APIRouter, HTTPException, Depends, Header
+import io
+from fastapi import APIRouter, HTTPException, Depends, Header, File, UploadFile, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -353,7 +355,7 @@ async def complete_job(
     agent: Agent = Depends(authenticate_agent_from_header)
 ):
     """Agent reports job completion"""
-    
+
     @sync_to_async
     def complete():
         AgentManager.complete_job(
@@ -363,10 +365,76 @@ async def complete_job(
             final_metrics=request.final_metrics,
             error=request.error
         )
-    
+
     await complete()
-    
+
     return {"status": "ok", "message": "Job completed"}
+
+
+@router.get("/datasets/{dataset_version_id}/download")
+async def download_dataset(
+    dataset_version_id: str,
+    agent: Agent = Depends(authenticate_agent_from_header)
+):
+    """Stream dataset zip to agent — works for all storage backends."""
+
+    @sync_to_async
+    def _fetch():
+        from projects.models import Version
+        try:
+            version = Version.objects.select_related('storage_profile').get(
+                version_id=dataset_version_id,
+                project__organization=agent.organization
+            )
+        except Version.DoesNotExist:
+            raise HTTPException(404, "Dataset version not found")
+        if not version.storage_key:
+            raise HTTPException(400, "Dataset version has no exported file")
+        from storage.services import get_storage_adapter_for_profile
+        adapter = get_storage_adapter_for_profile(version.storage_profile)
+        data = adapter.download_file(version.storage_key)
+        filename = version.storage_key.rsplit('/', 1)[-1] or 'dataset.zip'
+        return data, filename
+
+    data, filename = await _fetch()
+
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type='application/zip',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+    )
+
+
+@router.post("/artifacts/upload")
+async def upload_artifact(
+    key: str = Query(...),
+    storage_profile_id: str = Query(...),
+    file: UploadFile = File(...),
+    agent: Agent = Depends(authenticate_agent_from_header)
+):
+    """Receive artifact from agent and write to the configured storage backend."""
+    content = await file.read()
+
+    @sync_to_async
+    def _store():
+        from storage.models import StorageProfile
+        from storage.services import get_storage_adapter_for_profile
+        try:
+            profile = StorageProfile.objects.get(
+                storage_profile_id=storage_profile_id,
+                organization=agent.organization
+            )
+        except StorageProfile.DoesNotExist:
+            raise HTTPException(404, "Storage profile not found")
+        adapter = get_storage_adapter_for_profile(profile)
+        adapter.upload_file(
+            io.BytesIO(content),
+            key,
+            content_type=file.content_type or 'application/octet-stream'
+        )
+
+    await _store()
+    return {"status": "ok", "key": key}
 
 
 # ============= Utility Functions =============

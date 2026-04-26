@@ -22,15 +22,36 @@ class YOLOTrainer(BaseTrainer):
     
     def __init__(self, task: str, config: TrainingConfig, callbacks=None):
         super().__init__(task, config, callbacks)
-        
+
         self.model = None
         self.yolo_task = self._map_task_to_yolo(task)
-        
+
         # YOLO-specific config
         self.model_size = config.model_params.get('model_size', 'n')  # n, s, m, l, x
         self.model_version = config.model_params.get('version', '11')  # 8, 9, 10, 11
         self.pretrained = config.model_params.get('pretrained', True)
+
+        # Resolve actual available device, falling back to CPU if requested device unavailable
+        self.config.device = self._resolve_device(config.device)
     
+    @staticmethod
+    def _resolve_device(device) -> str:
+        """Return the best available device, falling back to CPU if requested device is absent."""
+        import torch
+        device = str(device)
+        # Treat numeric strings and 'cuda' as CUDA requests
+        if device == 'cuda' or device.isdigit():
+            if torch.cuda.is_available():
+                return device
+            logger.warning(f"CUDA not available (requested '{device}'), falling back to CPU")
+            return 'cpu'
+        if device == 'mps':
+            if torch.backends.mps.is_available():
+                return 'mps'
+            logger.warning("MPS not available, falling back to CPU")
+            return 'cpu'
+        return device  # 'cpu' or anything explicit passes through
+
     def _map_task_to_yolo(self, task: str) -> str:
         """Map generic task to YOLO task"""
         mapping = {
@@ -89,7 +110,17 @@ class YOLOTrainer(BaseTrainer):
                 f"    val/images/\n"
                 f"    val/labels/"
             )
-        
+
+        # Rewrite the 'path' field so YOLO resolves train/val/test dirs
+        # relative to the actual extraction directory in this container.
+        import yaml
+        with open(data_yaml) as f:
+            data = yaml.safe_load(f)
+        data['path'] = str(dataset_path.resolve())
+        with open(data_yaml, 'w') as f:
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+        logger.info(f"data.yaml path rewritten to: {dataset_path.resolve()}")
+
         self.data_yaml_path = data_yaml
         logger.info(f"Dataset prepared: {data_yaml}")
         
@@ -162,6 +193,19 @@ class YOLOTrainer(BaseTrainer):
         # Add model-specific params
         train_args.update(self.config.model_params.get('train_params', {}))
         
+        # Register per-epoch progress callback into Ultralytics' event system
+        def _on_epoch_end(yolo_trainer_obj):
+            epoch = yolo_trainer_obj.epoch + 1  # ultralytics is 0-indexed
+            total = yolo_trainer_obj.epochs
+            metrics = {
+                'train_loss': float(yolo_trainer_obj.loss) if hasattr(yolo_trainer_obj, 'loss') else 0.0,
+            }
+            if hasattr(yolo_trainer_obj, 'metrics') and yolo_trainer_obj.metrics:
+                metrics.update({k: float(v) for k, v in yolo_trainer_obj.metrics.items()})
+            self._call_progress(epoch, total, metrics)
+
+        self.model.add_callback('on_train_epoch_end', _on_epoch_end)
+
         # Train model
         results = self.model.train(**train_args)
         
