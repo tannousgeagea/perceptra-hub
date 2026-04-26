@@ -205,7 +205,7 @@ class AgentManager:
             'task': training_job.training_session.model_version.model.task.name,
             'config': training_job.training_session.config,
             'dataset_version_id': training_job.training_session.model_version.dataset_version.id if training_job.training_session.model_version.dataset_version else None,
-            'storage_profile_id': training_job.training_session.model_version.storage_profile.profile_id,
+            'storage_profile_id': training_job.training_session.model_version.storage_profile.storage_profile_id,
             'assigned_at': timezone.now().isoformat(),
             'agent_id': agent.agent_id
         }

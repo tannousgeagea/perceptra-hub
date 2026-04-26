@@ -117,6 +117,10 @@ class TrainingTriggerRequest(BaseModel):
         None,
         description="Compute profile to use (uses default if not specified)"
     )
+    agent_id: Optional[str] = Field(
+        None,
+        description="Specific on-premise agent to run the job (only for on-premise-agent profiles)"
+    )
 
 class TrainingTriggerResponse(BaseModel):
     """Response after triggering training"""
@@ -125,4 +129,6 @@ class TrainingTriggerResponse(BaseModel):
     training_session_id: str
     task_id: str
     status: str
+    compute_provider: Optional[str] = None
+    instance_type: Optional[str] = None
     message: str

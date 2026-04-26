@@ -71,7 +71,7 @@ async def trigger_training(
     # Verify dataset version exists and belongs to same organization
     try:
         dataset = await sync_to_async(DatasetVersion.objects.select_related('project').get)(
-            id=data.dataset_version_id,
+            version_id=data.dataset_version_id,
             project__organization=ctx.organization
         )
     except DatasetVersion.DoesNotExist:
@@ -122,11 +122,12 @@ async def trigger_training(
         )
     
     # Create model version
+    version_name = data.version_name or f"v{version_number}"
     model_version = await sync_to_async(ModelVersion.objects.create)(
         version_id=str(uuid.uuid4()),
         model=model,
         version_number=version_number,
-        version_name=data.version_name,
+        version_name=version_name,
         dataset_version=dataset,
         parent_version=parent_version,
         storage_profile=storage_profile,
@@ -146,14 +147,21 @@ async def trigger_training(
         triggered_by=ctx.user
     )
     
-    # Submit training via orchestrator
+    # Submit training via orchestrator — both init and submit must run in the
+    # same sync thread because __init__ traverses model_version.model.organization
+    # via a lazy ORM relation.
     from training.orchestrator import TrainingOrchestrator
-    
-    orchestrator = TrainingOrchestrator(model_version)
-    training_job = await sync_to_async(orchestrator.submit_training)(
-        training_session,
-        compute_profile_id=data.compute_profile_id
-    )
+
+    @sync_to_async
+    def run_orchestrator():
+        orch = TrainingOrchestrator(model_version)
+        return orch.submit_training(
+            training_session,
+            compute_profile_id=data.compute_profile_id,
+            agent_id=data.agent_id,
+        )
+
+    training_job = await run_orchestrator()
     
     return {
         "model_version_id": model_version.version_id,
