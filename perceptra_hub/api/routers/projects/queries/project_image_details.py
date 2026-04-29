@@ -11,7 +11,7 @@ import logging
 from asgiref.sync import sync_to_async
 
 from api.dependencies import get_project_context, ProjectContext
-from api.routers.projects.schemas import ProjectImageOut
+from api.routers.projects.schemas import ProjectImageDetails
 from projects.models import (
     ProjectImage,
 )
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/projects")
 
 @router.get(
     "/{project_id}/images/{image_id}", 
-    response_model=ProjectImageOut,
+    response_model=ProjectImageDetails,
     summary="Get Project Image Details",
     description="Returns detailed information about a specific project image including annotations, metadata, and job assignments."
 )
@@ -75,6 +75,7 @@ async def get_project_image(
         
         return {
             "id": str(pi.id),
+            "project_image_id": str(pi.id),
             "image": {
                 "id": str(pi.id),
                 "image_id": str(image.image_id),

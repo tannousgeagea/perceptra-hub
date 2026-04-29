@@ -107,6 +107,8 @@ async def list_job_images(
                 queryset = queryset.filter(project_image__annotated=annotated)
         
         total = queryset.count()
+        image_ids = list(queryset.values_list('project_image__image__id', flat=True))
+        project_image_ids = list(queryset.values_list('project_image__id', flat=True))
         
         job_images = list(
             queryset.select_related(
@@ -123,6 +125,8 @@ async def list_job_images(
             "annotated": annotated_count,
             "unannotated": unannotated_count,
             "reviewed": reviewed_count,
+            "image_ids": list(map(str, image_ids)),
+            "project_image_ids": list(map(str, project_image_ids)),
             "job": {
                 "id": str(job.id),
                 "name": job.name,
@@ -133,7 +137,8 @@ async def list_job_images(
             },
             "images": [
                 {
-                    "id": str(ji.project_image.id),
+                    "id": str(ji.project_image.image.id),
+                    "project_image_id": str(ji.project_image.id),
                     "image_id": str(ji.project_image.image.image_id),
                     "name": ji.project_image.image.name,
                     "original_filename": ji.project_image.image.original_filename,
@@ -150,6 +155,8 @@ async def list_job_images(
                     "created_at": ji.project_image.image.created_at,
                     "updated_at": ji.project_image.updated_at,
                     "uploaded_by": ji.project_image.image.uploaded_by.username,
+                    "reviewed_at": ji.project_image.reviewed_at.isoformat() if ji.project_image.reviewed_at else None,
+                    "reviewed_by": ji.project_image.reviewed_by.username if ji.project_image.reviewed_by else None,
                     "tags": [t.name for t in ji.project_image.image.tags.all()],
                     "storage_profile": {
                         "id": str(ji.project_image.image.storage_profile.id),
