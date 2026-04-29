@@ -180,8 +180,9 @@ class AnnotationOut(BaseModel):
     created_at: str
     created_by: Optional[str]
     
-class ProjectImageOut(BaseModel):
+class ProjectImageDetails(BaseModel):
     id: str
+    project_image_id: str
     image: ImageDetail
     status: Optional[str]
     annotated: bool
@@ -197,11 +198,16 @@ class ProjectImageOut(BaseModel):
     added_at: str
     reviewed_at: Optional[str]
     updated_at: str
+    split:Optional[str] = None
     jobs: List[JobSummary]
     annotations: List[AnnotationOut]
     
 class ProjectImage(ImageDetail):
+    project_image_id: str
+    added_at: Optional[str] = None
+    added_by: Optional[str] = None
     split:Optional[str] = None
+    jobs: Optional[List[JobSummary]] = None
     annotations: List[AnnotationOut]
     
 class ProjectImagesResponse(BaseModel):
@@ -210,6 +216,7 @@ class ProjectImagesResponse(BaseModel):
     unannotated: int
     reviewed: int
     image_ids: Optional[List] = None
+    project_image_ids: Optional[List[str]] = None
     images:List[ProjectImage]
     
 class JobImagesResponce(ProjectImagesResponse):

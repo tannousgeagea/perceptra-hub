@@ -103,7 +103,8 @@ async def list_project_images(
             unannotated_count=Count('id', filter=Q(status='unannotated')),
         )
 
-        image_ids = list(queryset.values_list('id', flat=True))
+        image_ids = list(queryset.values_list('image__id', flat=True))
+        project_image_ids = list(queryset.values_list('id', flat=True))
         total = queryset.distinct().count()
         
         # Get paginated results
@@ -122,13 +123,15 @@ async def list_project_images(
         
         return {
             "total": total,
-            "image_ids": image_ids,
+            "image_ids": list(map(str, image_ids)),
+            "project_image_ids": list(map(str, project_image_ids)),
             "annotated": counts["annotated_count"],
             "unannotated": counts["unannotated_count"],
             "reviewed": counts["reviewed_count"],
             "images": [
                 {
-                    "id": str(pi.id),
+                    "id": str(pi.image.id),
+                    "project_image_id": str(pi.id),
                     "image_id": str(pi.image.image_id),
                     "name": pi.image.name,
                     "original_filename": pi.image.original_filename,
@@ -160,6 +163,14 @@ async def list_project_images(
                     "job_assignment_status": pi.job_assignment_status,
                     "added_at": pi.added_at.isoformat(),
                     "split": pi.mode.mode if pi.mode else None,
+                    "jobs": [
+                        {
+                            "id": str(ja.job.id),
+                            "name": ja.job.name,
+                            "status": ja.job.status
+                        }
+                        for ja in pi.job_assignments.all()
+                    ],
                     "annotations": [
                         {
                             "id": str(ann.id),

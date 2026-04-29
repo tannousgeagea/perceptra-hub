@@ -17,7 +17,7 @@ import django
 django.setup()
 
 from django.db import models
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from api.dependencies import RequestContext, get_request_context
 from storage.models import StorageProfile
 from storage.services import get_storage_adapter_for_profile, get_default_storage_adapter
@@ -34,7 +34,7 @@ router = APIRouter(prefix="/images")
 
 
 class BulkDeleteImagesRequest(BaseModel):
-    image_ids: List[UUID]
+    image_ids: List[str] = Field(..., description="List of image IDs to delete")
 
 # ============= Helper Functions =============
 
@@ -547,9 +547,11 @@ async def list_images(
             ).prefetch_related('tags').distinct()[skip:skip + limit]
         )
         
+        image_ids = list(queryset.values_list('id', flat=True))
         return {
             "total": total,
             "images": images,
+            "image_ids": list(map(str, image_ids)),
             "skip": skip,
             "limit": limit
         }
@@ -568,6 +570,7 @@ async def list_images(
         "total": result["total"],
         "page": (result["skip"] // result["limit"]) + 1,
         "page_size": result["limit"],
+        "image_ids": result["image_ids"],
         "images": [
             {
                 "id": str(img.id),
@@ -708,7 +711,7 @@ async def download_image(
     description="Delete image from storage and database"
 )
 async def delete_image(
-    image_id: UUID,
+    image_id: str,
     ctx: RequestContext = Depends(get_request_context)
 ):
     """Delete image."""
@@ -718,7 +721,7 @@ async def delete_image(
     
     try:
         image = Image.objects.get(
-            image_id=image_id,
+            id=image_id,
             organization=ctx.organization
         )
         
@@ -773,7 +776,7 @@ async def bulk_delete_images(
 
             images = list(
                 Image.objects.select_for_update().filter(
-                    image_id__in=image_ids,
+                    id__in=image_ids,
                     organization=ctx.organization
                 )
             )
@@ -795,7 +798,7 @@ async def bulk_delete_images(
 
             # 🔥 Delete DB records (triggers post_delete)
             Image.objects.filter(
-                image_id__in=[img.image_id for img in images],
+                id__in=[img.id for img in images],
                 organization=ctx.organization
             ).delete()
 
@@ -834,7 +837,7 @@ async def bulk_delete_images(
     description="Add one or more tags to an image"
 )
 async def add_tags_to_image(
-    image_id: UUID,
+    image_id: str,
     tag_names: List[str],
     ctx: RequestContext = Depends(get_request_context)
 ):
@@ -842,7 +845,7 @@ async def add_tags_to_image(
     
     try:
         image = Image.objects.get(
-            image_id=image_id,
+            id=image_id,
             organization=ctx.organization
         )
         
@@ -885,7 +888,7 @@ async def add_tags_to_image(
     description="Add one or more tags to multiple images"
 )
 async def bulk_add_tags_to_images(
-    image_ids: List[UUID] = Body(..., description="List of image IDs"),
+    image_ids: List[str] = Body(..., description="List of image IDs"),
     tag_names: List[str] = Body(..., description="List of tag names"),
     ctx: RequestContext = Depends(get_request_context)
 ):
@@ -910,7 +913,7 @@ async def bulk_add_tags_to_images(
             # 🔎 Fetch images
             images = list(
                 Image.objects.filter(
-                    image_id__in=image_ids,
+                    id__in=image_ids,
                     organization=ctx.organization
                 )
             )
@@ -988,7 +991,7 @@ async def bulk_add_tags_to_images(
     description="Remove a specific tag from an image"
 )
 async def remove_tag_from_image(
-    image_id: UUID,
+    image_id: str,
     tag_name: str,
     ctx: RequestContext = Depends(get_request_context)
 ):
@@ -996,7 +999,7 @@ async def remove_tag_from_image(
     
     try:
         image = Image.objects.get(
-            image_id=image_id,
+            id=image_id,
             organization=ctx.organization
         )
         
@@ -1033,18 +1036,18 @@ async def remove_tag_from_image(
     description="Add an image to a project"
 )
 async def associate_image_with_project(
-    image_id: UUID,
+    image_id: str,
     project_id: UUID,
     role: Optional[str] = Query(None, description="Role in project (training, validation, test)"),
     ctx: RequestContext = Depends(get_request_context)
 ):
     """Associate an image with a project."""
     
-    from projects.models import Project
+    from projects.models import Project, ProjectImage
     
     try:
         image = Image.objects.get(
-            image_id=image_id,
+            id=image_id,
             organization=ctx.organization
         )
         
@@ -1054,7 +1057,7 @@ async def associate_image_with_project(
         )
         
         # Create or update association
-        association, created = ImageProject.objects.get_or_create(
+        association, created = ProjectImage.objects.get_or_create(
             image=image,
             project=project,
             defaults={
@@ -1094,19 +1097,20 @@ async def associate_image_with_project(
     description="Remove an image from a project"
 )
 async def disassociate_image_from_project(
-    image_id: UUID,
+    image_id: str,
     project_id: UUID,
     ctx: RequestContext = Depends(get_request_context)
 ):
     """Remove image from project."""
+    from projects.models import Project, ProjectImage
     
     try:
         image = Image.objects.get(
-            image_id=image_id,
+            id=image_id,
             organization=ctx.organization
         )
         
-        ImageProject.objects.filter(
+        ProjectImage.objects.filter(
             image=image,
             project_id=project_id
         ).delete()
