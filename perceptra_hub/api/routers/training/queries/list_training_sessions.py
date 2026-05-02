@@ -60,6 +60,7 @@ def _query_sessions(
     organization,
     project_id: Optional[str],
     model_id: Optional[str],
+    model_uuid: Optional[str],
     search: Optional[str],
     status: Optional[str],
     limit: int,
@@ -74,7 +75,9 @@ def _query_sessions(
 
     if project_id:
         qs = qs.filter(model_version__model__project__project_id=project_id)
-    if model_id:
+    if model_uuid:
+        qs = qs.filter(model_version__model__model_id=model_uuid)
+    elif model_id:
         qs = qs.filter(model_version__model__name__icontains=model_id)
     if search:
         qs = qs.filter(
@@ -93,6 +96,7 @@ def _query_sessions(
 async def list_training_sessions(
     project_id: Optional[str] = Query(None),
     model_id: Optional[str] = Query(None),
+    model_uuid: Optional[str] = Query(None, description="Filter by exact model UUID"),
     search: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     limit: int = Query(10, ge=1, le=100),
@@ -100,7 +104,7 @@ async def list_training_sessions(
     ctx: RequestContext = Depends(get_request_context),
 ):
     total, sessions = await _query_sessions(
-        ctx.organization, project_id, model_id, search, status, limit, offset
+        ctx.organization, project_id, model_id, model_uuid, search, status, limit, offset
     )
 
     results = []
