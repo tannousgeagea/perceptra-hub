@@ -95,6 +95,7 @@ class ModelListResponse(BaseModel):
     version_count: int
     latest_version_number: Optional[int] = None
     latest_status: Optional[str] = None
+    latest_version_model_size: Optional[str] = None
     has_production_version: bool = False
     production_version_number: Optional[int] = None
     production_version_id: Optional[str] = None
