@@ -25,23 +25,28 @@ class RFDETRTrainer(BaseTrainer):
     
     def __init__(self, task: str, config: TrainingConfig, callbacks=None):
         super().__init__(task, config, callbacks)
-        
+
         if task != 'object-detection':
             raise ValueError(f"RF-DETR only supports object-detection, got: {task}")
-        
+
         self.model = None
         self.train_loader = None
         self.val_loader = None
         self.optimizer = None
         self.scheduler = None
-        self.scaler = None  # For mixed precision
-        
+        self.scaler = None
+
         # RF-DETR specific config
-        self.model_variant = config.model_params.get('variant', 'rtdetr-l')  # rtdetr-l, rtdetr-x
+        self.model_variant = config.model_params.get('variant', 'rtdetr-l')
         self.num_classes = config.model_params.get('num_classes')
         self.pretrained_weights = config.model_params.get('pretrained_weights')
-        self.use_amp = config.model_params.get('use_amp', True)  # Automatic Mixed Precision
-        
+        self.use_amp = config.model_params.get('use_amp', True)
+        self.grad_clip_norm = config.model_params.get('grad_clip_norm', 0.1)
+        self.warmup_epochs = config.model_params.get('warmup_epochs', 3)
+        self.keep_last_n_checkpoints = config.model_params.get('keep_last_n_checkpoints', 3)
+        # start_epoch can be overridden by checkpoint resume
+        self.start_epoch = 1
+
         self.device = self.get_device(config.device)
         
     def prepare_dataset(self):
@@ -146,39 +151,48 @@ class RFDETRTrainer(BaseTrainer):
     def create_model(self):
         """Create RT-DETR model"""
         try:
-            # Try to import RT-DETR from official repo or roboflow
             from rtdetr_pytorch import RTDETR
-            
+
             logger.info(f"Creating RT-DETR model: {self.model_variant}")
-            
-            # Initialize model
+
             self.model = RTDETR(
                 variant=self.model_variant,
                 num_classes=self.num_classes,
                 pretrained=self.pretrained_weights is not None
             )
-            
-            # Load pretrained weights if specified
-            if self.pretrained_weights:
+
+            # Load initial weights: pretrained backbone OR full checkpoint
+            if self.config.checkpoint_path and self.config.checkpoint_path.exists():
+                logger.info(f"Loading resume checkpoint: {self.config.checkpoint_path}")
+                resume = torch.load(self.config.checkpoint_path, map_location='cpu')
+                self.model.load_state_dict(resume['model'])
+            elif self.pretrained_weights:
                 logger.info(f"Loading pretrained weights: {self.pretrained_weights}")
-                checkpoint = torch.load(self.pretrained_weights, map_location='cpu')
-                self.model.load_state_dict(checkpoint['model'], strict=False)
-            
-            # Move to device
+                ckpt = torch.load(self.pretrained_weights, map_location='cpu')
+                self.model.load_state_dict(ckpt['model'], strict=False)
+                resume = None
+            else:
+                resume = None
+
             self.model = self.model.to(self.device)
-            
-            # Setup optimizer
             self._setup_optimizer()
-            
-            # Setup mixed precision scaler
+
+            # Restore optimizer + scheduler state when resuming
+            if resume:
+                if 'optimizer' in resume and self.optimizer:
+                    self.optimizer.load_state_dict(resume['optimizer'])
+                if 'scheduler' in resume and self.scheduler:
+                    self.scheduler.load_state_dict(resume['scheduler'])
+                self.start_epoch = resume.get('epoch', 0) + 1
+                logger.info(f"Resumed from epoch {resume.get('epoch', 0)}, will start at epoch {self.start_epoch}")
+
             if self.use_amp:
                 self.scaler = torch.cuda.amp.GradScaler()
                 logger.info("Using Automatic Mixed Precision (AMP)")
-            
+
             logger.info(f"Model created with {self._count_parameters():,} parameters")
-            
             return self.model
-            
+
         except ImportError:
             raise ImportError(
                 "RT-DETR not installed. Install with:\n"
@@ -222,20 +236,40 @@ class RFDETRTrainer(BaseTrainer):
         else:
             raise ValueError(f"Unknown optimizer: {self.config.optimizer}")
         
-        # Create scheduler
+        # Build main scheduler
+        effective_epochs = max(1, self.config.epochs - self.warmup_epochs)
         if self.config.scheduler == 'cosine':
-            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                self.optimizer,
-                T_max=self.config.epochs
+            main_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=effective_epochs
             )
         elif self.config.scheduler == 'step':
-            self.scheduler = torch.optim.lr_scheduler.StepLR(
-                self.optimizer,
-                step_size=30,
-                gamma=0.1
+            main_sched = torch.optim.lr_scheduler.StepLR(
+                self.optimizer, step_size=30, gamma=0.1
             )
-        
-        logger.info(f"Optimizer: {self.config.optimizer}, Scheduler: {self.config.scheduler}")
+        else:
+            main_sched = None
+
+        # Prepend linear warmup when warmup_epochs > 0
+        if self.warmup_epochs > 0 and main_sched is not None:
+            from torch.optim.lr_scheduler import LinearLR, SequentialLR
+            warmup_sched = LinearLR(
+                self.optimizer,
+                start_factor=0.1,
+                end_factor=1.0,
+                total_iters=self.warmup_epochs,
+            )
+            self.scheduler = SequentialLR(
+                self.optimizer,
+                schedulers=[warmup_sched, main_sched],
+                milestones=[self.warmup_epochs],
+            )
+        else:
+            self.scheduler = main_sched
+
+        logger.info(
+            f"Optimizer: {self.config.optimizer}, Scheduler: {self.config.scheduler}, "
+            f"Warmup epochs: {self.warmup_epochs}"
+        )
     
     def train_epoch(self, epoch: int) -> TrainingMetrics:
         """Train single epoch"""
@@ -246,34 +280,44 @@ class RFDETRTrainer(BaseTrainer):
         
         for batch_idx, (images, targets) in enumerate(self.train_loader):
             images = images.to(self.device)
-            
-            # Move targets to device
-            targets = [{k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
-                       for k, v in t.items()} for t in targets]
-            
-            # Forward pass with AMP
-            if self.use_amp:
-                with torch.cuda.amp.autocast():
+            targets = [{k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                        for k, v in t.items()} for t in targets]
+
+            try:
+                if self.use_amp:
+                    with torch.cuda.amp.autocast():
+                        loss_dict = self.model(images, targets)
+                        loss = sum(loss_dict.values())
+                    self.optimizer.zero_grad()
+                    self.scaler.scale(loss).backward()
+                    # Unscale before clipping so norms are in real space
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), max_norm=self.grad_clip_norm
+                    )
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
                     loss_dict = self.model(images, targets)
                     loss = sum(loss_dict.values())
-                
-                # Backward pass
-                self.optimizer.zero_grad()
-                self.scaler.scale(loss).backward()
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                # Regular training
-                loss_dict = self.model(images, targets)
-                loss = sum(loss_dict.values())
-                
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-            
-            total_loss += loss.item()
-            
-            # Callback: batch end
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), max_norm=self.grad_clip_norm
+                    )
+                    self.optimizer.step()
+
+                total_loss += loss.item()
+
+            except torch.cuda.OutOfMemoryError as oom:
+                torch.cuda.empty_cache()
+                logger.error(f"CUDA OOM at epoch {epoch}, batch {batch_idx}: {oom}")
+                self.callbacks.on_train_error(epoch, oom)
+                raise RuntimeError(
+                    f"CUDA out of memory during training at epoch {epoch}. "
+                    "Try reducing batch_size or image_size."
+                ) from oom
+
             if batch_idx % 10 == 0:
                 self.callbacks.on_batch_end(batch_idx, num_batches, loss.item())
                 logger.info(
@@ -364,7 +408,7 @@ class RFDETRTrainer(BaseTrainer):
         """Save model checkpoint"""
         checkpoint_name = 'best.pt' if is_best else f'epoch_{epoch}.pt'
         checkpoint_path = self.config.output_dir / checkpoint_name
-        
+
         checkpoint = {
             'epoch': epoch,
             'model': self.model.state_dict(),
@@ -372,13 +416,25 @@ class RFDETRTrainer(BaseTrainer):
             'config': self.config.__dict__,
             'num_classes': self.num_classes
         }
-        
         if self.scheduler:
             checkpoint['scheduler'] = self.scheduler.state_dict()
-        
+
         torch.save(checkpoint, checkpoint_path)
         logger.info(f"Checkpoint saved: {checkpoint_path}")
-        
+
+        # Remove old epoch checkpoints beyond keep_last_n
+        if not is_best:
+            epoch_checkpoints = sorted(
+                self.config.output_dir.glob('epoch_*.pt'),
+                key=lambda p: int(p.stem.split('_')[1])
+            )
+            for old_ckpt in epoch_checkpoints[:-self.keep_last_n_checkpoints]:
+                try:
+                    old_ckpt.unlink()
+                    logger.info(f"Removed old checkpoint: {old_ckpt}")
+                except OSError as e:
+                    logger.warning(f"Could not remove old checkpoint {old_ckpt}: {e}")
+
         return checkpoint_path
     
     def export_model(self, checkpoint_path: Path) -> Optional[Path]:

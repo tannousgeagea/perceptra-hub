@@ -111,20 +111,21 @@ class YOLOTrainer(BaseTrainer):
                 f"    val/labels/"
             )
 
-        # Rewrite the 'path' field so YOLO resolves train/val/test dirs
-        # relative to the actual extraction directory in this container.
+        # Write a derived copy to output_dir with the resolved path field.
+        # Never modify the original data.yaml so it survives interruptions.
         import yaml
         with open(data_yaml) as f:
             data = yaml.safe_load(f)
         data['path'] = str(dataset_path.resolve())
-        with open(data_yaml, 'w') as f:
+        derived_yaml = self.config.output_dir / 'data_training.yaml'
+        with open(derived_yaml, 'w') as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
-        logger.info(f"data.yaml path rewritten to: {dataset_path.resolve()}")
+        logger.info(f"data_training.yaml written to: {derived_yaml}")
 
-        self.data_yaml_path = data_yaml
-        logger.info(f"Dataset prepared: {data_yaml}")
-        
-        return data_yaml
+        self.data_yaml_path = derived_yaml
+        logger.info(f"Dataset prepared: {data_yaml} → {derived_yaml}")
+
+        return derived_yaml
     
     def create_model(self):
         """Create YOLO model"""
@@ -195,14 +196,24 @@ class YOLOTrainer(BaseTrainer):
         
         # Register per-epoch progress callback into Ultralytics' event system
         def _on_epoch_end(yolo_trainer_obj):
+            import math
             epoch = yolo_trainer_obj.epoch + 1  # ultralytics is 0-indexed
             total = yolo_trainer_obj.epochs
-            metrics = {
+            raw = {
                 'train_loss': float(yolo_trainer_obj.loss) if hasattr(yolo_trainer_obj, 'loss') else 0.0,
             }
             if hasattr(yolo_trainer_obj, 'metrics') and yolo_trainer_obj.metrics:
-                metrics.update({k: float(v) for k, v in yolo_trainer_obj.metrics.items()})
-            self._call_progress(epoch, total, metrics)
+                raw.update({k: float(v) for k, v in yolo_trainer_obj.metrics.items()
+                            if isinstance(v, (int, float)) and math.isfinite(float(v))})
+            self._call_progress(epoch, total, raw)
+            # Also drive the standard epoch callback so DB is updated each epoch
+            epoch_metrics = TrainingMetrics(
+                epoch=epoch,
+                train_loss=raw.get('train_loss', 0.0),
+                metrics={k: v for k, v in raw.items() if k != 'train_loss'},
+                learning_rate=self.config.learning_rate,
+            )
+            self.callbacks.on_epoch_end(epoch, epoch_metrics)
 
         self.model.add_callback('on_train_epoch_end', _on_epoch_end)
 
@@ -275,53 +286,51 @@ class YOLOTrainer(BaseTrainer):
     
     def _extract_metrics_from_results(self, results, epoch: int) -> TrainingMetrics:
         """Extract metrics from YOLO results object"""
-        # YOLO results contain metrics in results.results_dict or similar
-        # This is a simplified extraction - adjust based on YOLO version
-        
+        import math
+
         try:
-            # Try to get metrics from results
             metrics_dict = {}
-            
-            # Common YOLO metrics
+
             if hasattr(results, 'box'):
-                # Object detection metrics
-                if hasattr(results.box, 'map'):
-                    metrics_dict['mAP50'] = float(results.box.map)
                 if hasattr(results.box, 'map50'):
                     metrics_dict['mAP50'] = float(results.box.map50)
+                elif hasattr(results.box, 'map'):
+                    metrics_dict['mAP50'] = float(results.box.map)
                 if hasattr(results.box, 'map75'):
                     metrics_dict['mAP75'] = float(results.box.map75)
-            
-            # Get loss values
+
             train_loss = 0.0
             val_loss = None
-            
+
             if hasattr(results, 'results_dict'):
                 rd = results.results_dict
                 train_loss = rd.get('train/loss', 0.0)
                 val_loss = rd.get('val/loss')
-                
-                # Add precision/recall
                 if 'metrics/precision(B)' in rd:
                     metrics_dict['precision'] = rd['metrics/precision(B)']
                 if 'metrics/recall(B)' in rd:
                     metrics_dict['recall'] = rd['metrics/recall(B)']
-            
+
+            # Drop NaN/Inf values that can't be serialized
+            metrics_dict = {
+                k: v for k, v in metrics_dict.items()
+                if isinstance(v, (int, float)) and math.isfinite(float(v))
+            }
+            if train_loss and not math.isfinite(float(train_loss)):
+                logger.warning(f"Non-finite train_loss at epoch {epoch}, resetting to 0.0")
+                train_loss = 0.0
+
             return TrainingMetrics(
                 epoch=epoch,
-                train_loss=train_loss,
-                val_loss=val_loss,
+                train_loss=float(train_loss),
+                val_loss=float(val_loss) if val_loss is not None else None,
                 metrics=metrics_dict,
                 learning_rate=self.config.learning_rate
             )
-            
+
         except Exception as e:
             logger.warning(f"Could not extract detailed metrics: {e}")
-            return TrainingMetrics(
-                epoch=epoch,
-                train_loss=0.0,
-                metrics={}
-            )
+            return TrainingMetrics(epoch=epoch, train_loss=0.0, metrics={})
     
     def _get_cached_metrics(self, epoch: int) -> TrainingMetrics:
         """Get metrics for a specific epoch from cached results"""
@@ -338,29 +347,34 @@ class YOLOTrainer(BaseTrainer):
         Override train to handle YOLO's all-at-once training.
         """
         import time
-        
+
         start_time = time.time()
-        
         self.callbacks.on_train_start(self.config)
         logger.info("Starting YOLO training")
-        
-        # Prepare and create model
-        self.prepare_dataset()
-        self.create_model()
-        
-        # Train (YOLO does all epochs at once)
-        train_metrics = self.train_epoch(1)
-        
+
+        try:
+            self.prepare_dataset()
+            self.create_model()
+
+            # YOLO runs all epochs internally; _on_epoch_end fires per epoch via callback
+            train_metrics = self.train_epoch(1)
+        except Exception as e:
+            self.callbacks.on_train_error(self.config.epochs, e)
+            raise
+
         # Get checkpoint paths
         weights_dir = self.config.output_dir / 'train' / 'weights'
         best_checkpoint = weights_dir / 'best.pt'
         final_checkpoint = weights_dir / 'last.pt'
-        
-        # Export model
+
+        # Validate checkpoint exists
+        if not best_checkpoint.exists():
+            logger.warning(f"Expected best checkpoint not found: {best_checkpoint}")
+            best_checkpoint = final_checkpoint if final_checkpoint.exists() else best_checkpoint
+
         onnx_path = self.export_model(best_checkpoint)
-        
         training_time = time.time() - start_time
-        
+
         result = TrainingResult(
             success=True,
             best_checkpoint_path=best_checkpoint,
@@ -372,7 +386,6 @@ class YOLOTrainer(BaseTrainer):
             training_time_seconds=training_time,
             onnx_path=onnx_path
         )
-        
+
         self.callbacks.on_train_end(result)
-        
         return result

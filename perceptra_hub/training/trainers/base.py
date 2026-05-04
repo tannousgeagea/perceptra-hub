@@ -121,29 +121,33 @@ class TrainingResult:
 
 class TrainingCallbacks:
     """Callbacks for training progress"""
-    
+
     def on_train_start(self, config: TrainingConfig):
         """Called at start of training"""
         pass
-    
+
     def on_epoch_start(self, epoch: int):
         """Called at start of each epoch"""
         pass
-    
+
     def on_epoch_end(self, epoch: int, metrics: TrainingMetrics):
         """Called at end of each epoch"""
         pass
-    
+
     def on_batch_end(self, batch: int, total_batches: int, loss: float):
         """Called after each batch"""
         pass
-    
+
     def on_train_end(self, result: TrainingResult):
         """Called at end of training"""
         pass
-    
+
     def on_checkpoint_saved(self, epoch: int, path: Path, is_best: bool):
         """Called when checkpoint is saved"""
+        pass
+
+    def on_train_error(self, epoch: int, error: Exception):
+        """Called when training encounters an unrecoverable error"""
         pass
 
 
@@ -310,45 +314,52 @@ class BaseTrainer(ABC):
         best_metrics = None
         best_metric_value = float('inf')  # For loss-based (lower is better)
         best_checkpoint_path = None
-        
-        for epoch in range(1, self.config.epochs + 1):
+        patience_counter = 0
+        start_epoch = getattr(self, 'start_epoch', 1)
+
+        for epoch in range(start_epoch, self.config.epochs + 1):
             self.callbacks.on_epoch_start(epoch)
             logger.info(f"Epoch {epoch}/{self.config.epochs}")
-            
+
             # Train epoch
             train_metrics = self.train_epoch(epoch)
             logger.info(f"Train loss: {train_metrics.train_loss:.4f}")
-            
+
             # Validate
             val_metrics = self.validate(epoch)
             if val_metrics:
                 logger.info(f"Val loss: {val_metrics.val_loss:.4f}")
                 train_metrics.val_loss = val_metrics.val_loss
                 train_metrics.metrics.update(val_metrics.metrics)
-            
+
             # Check if best model
             metric_value = val_metrics.val_loss if val_metrics else train_metrics.train_loss
             is_best = metric_value < best_metric_value
-            
+
             if is_best:
                 best_metric_value = metric_value
                 best_metrics = train_metrics
+                patience_counter = 0
                 logger.info(f"New best model! Metric: {metric_value:.4f}")
-            
+            else:
+                patience_counter += 1
+
             # Save checkpoint
             checkpoint_path = self.save_checkpoint(epoch, is_best)
             if is_best:
                 best_checkpoint_path = checkpoint_path
-            
+
             self.callbacks.on_checkpoint_saved(epoch, checkpoint_path, is_best)
             self.callbacks.on_epoch_end(epoch, train_metrics)
             self._call_progress(epoch, self.config.epochs, train_metrics.to_dict())
 
             # Early stopping
-            if self.config.patience and epoch > self.config.patience:
-                # Simple early stopping: check if no improvement in last N epochs
-                # (Implement more sophisticated logic in subclasses if needed)
-                pass
+            if self.config.patience and patience_counter >= self.config.patience:
+                logger.info(
+                    f"Early stopping: no improvement for {self.config.patience} epochs "
+                    f"(best metric: {best_metric_value:.4f})"
+                )
+                break
         
         # Training complete
         training_time = time.time() - start_time

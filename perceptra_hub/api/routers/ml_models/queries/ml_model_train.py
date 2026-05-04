@@ -121,6 +121,21 @@ async def trigger_training(
             detail="No default storage profile configured for organization"
         )
     
+    # Build training config, injecting model_size from model defaults if not already present
+    training_config = dict(data.config) if data.config else {}
+    if 'model_params' not in training_config:
+        training_config['model_params'] = {}
+    if not training_config['model_params'].get('model_size'):
+        default_size = model.default_config.get('model_size', '')
+        if default_size:
+            training_config['model_params']['model_size'] = default_size
+
+    # Resolve effective model_size for the version record
+    effective_model_size = (
+        training_config['model_params'].get('model_size')
+        or model.default_config.get('model_size', '')
+    )
+
     # Create model version
     version_name = data.version_name or f"v{version_number}"
     model_version = await sync_to_async(ModelVersion.objects.create)(
@@ -131,18 +146,19 @@ async def trigger_training(
         dataset_version=dataset,
         parent_version=parent_version,
         storage_profile=storage_profile,
-        config=data.config,
+        config=training_config,
+        model_size=effective_model_size,
         status='queued',
         created_by=ctx.user
     )
     
-    # Create training session
+    # Create training session (use the enriched training_config with model_params.model_size)
     session_id = str(uuid.uuid4())
     training_session = await sync_to_async(TrainingSession.objects.create)(
         session_id=session_id,
         model_version=model_version,
         storage_profile=storage_profile,
-        config=data.config,
+        config=training_config,
         status='queued',
         triggered_by=ctx.user
     )

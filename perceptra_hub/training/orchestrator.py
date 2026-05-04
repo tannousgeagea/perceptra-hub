@@ -79,23 +79,48 @@ class TrainingOrchestrator:
         )
         logger.info(f"Selected provider: {provider.name} ({instance_type})")
         
-        # Step 4: Create job record (atomic operation)
+        # Step 4: Create job record atomically with capacity lock to prevent races
         with transaction.atomic():
-            training_job = TrainingJob.objects.create(
-                job_id=str(uuid.uuid4()),
-                training_session=training_session,
-                compute_profile=compute_profile,
-                actual_provider=provider,
-                instance_type=instance_type,
-                estimated_cost=self._estimate_cost(provider, instance_type, training_session)
-            )
-            
-            # Update session status
+            # Idempotent: reuse existing job if already created for this session
+            existing_job = TrainingJob.objects.filter(
+                training_session=training_session
+            ).first()
+            if existing_job and existing_job.external_job_id:
+                logger.info(
+                    f"Job already submitted for session {training_session.session_id}: "
+                    f"{existing_job.job_id}"
+                )
+                return existing_job
+
+            # Lock the profile row to serialize concurrent capacity checks
+            ComputeProfile.objects.select_for_update().get(pk=compute_profile.pk)
+            active_count = self._get_active_jobs_count(compute_profile, provider)
+            if (
+                provider.provider_type in ['platform-gpu', 'platform-cpu']
+                and active_count >= compute_profile.max_concurrent_jobs
+            ):
+                logger.warning(
+                    f"Platform provider {provider.name} at capacity "
+                    f"({active_count}/{compute_profile.max_concurrent_jobs}), will queue"
+                )
+
+            if existing_job:
+                training_job = existing_job
+            else:
+                training_job = TrainingJob.objects.create(
+                    job_id=str(uuid.uuid4()),
+                    training_session=training_session,
+                    compute_profile=compute_profile,
+                    actual_provider=provider,
+                    instance_type=instance_type,
+                    estimated_cost=self._estimate_cost(provider, instance_type, training_session)
+                )
+
             training_session.status = 'queued'
             training_session.compute_resource = f"{provider.name}/{instance_type}"
             training_session.save()
-        
-        # Step 5: Submit to provider (outside transaction)
+
+        # Step 5: Submit to provider (outside transaction — network I/O should not hold DB lock)
         try:
             external_job_id = self._submit_to_provider(
                 provider,
@@ -103,25 +128,23 @@ class TrainingOrchestrator:
                 compute_profile,
                 agent_id=agent_id,
             )
-            
-            # Update with external ID
+
             training_job.external_job_id = external_job_id
             training_job.started_at = timezone.now()
             training_job.save()
-            
+
             logger.info(
                 f"Successfully submitted job {training_job.job_id} "
                 f"to {provider.name} (external_id={external_job_id})"
             )
-            
+
         except Exception as e:
             logger.error(f"Failed to submit job to {provider.name}: {e}")
-            # Mark job as failed
             training_job.training_session.status = 'failed'
             training_job.training_session.error_message = f"Submission failed: {str(e)}"
             training_job.training_session.save()
             raise RuntimeError(f"Job submission failed: {str(e)}")
-        
+
         return training_job
     
     def _select_compute_profile(self, profile_id: Optional[str]) -> ComputeProfile:
