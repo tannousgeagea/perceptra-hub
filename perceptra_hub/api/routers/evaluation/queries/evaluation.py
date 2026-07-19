@@ -31,6 +31,8 @@ from projects.models import Project
 from api.routers.evaluation.schemas import *
 from api.routers.evaluation.cache import get_evaluation_cache, CacheKeyBuilder
 from api.dependencies import RequestContext, get_request_context
+from projects.context import ProjectContext
+from projects.dependencies import get_project_context
 
 # ============================================================================
 # OPTIMIZED DJANGO ORM QUERIES
@@ -557,8 +559,6 @@ router = APIRouter(prefix="/evaluation", route_class=TimedRoute)
     summary="Get evaluated images with annotations"
 )
 async def get_project_evaluation(
-    project_id: int = Path(..., description="Project ID"),
-    
     # Filtering
     model_version: Optional[str] = Query(None, description="Filter by model version"),
     reviewed_only: bool = Query(False, description="Only reviewed images"),
@@ -566,18 +566,20 @@ async def get_project_evaluation(
     class_ids: Optional[List[int]] = Query(None, description="Filter by class IDs"),
     min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0),
     evaluation_status: Optional[List[EvaluationStatus]] = Query(None),
-    
+
     # Pagination
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=1000),
-    ctx: RequestContext = Depends(get_request_context),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
     """
     Retrieve images with annotations and evaluation metrics.
-    
+
     Optimized with Django ORM prefetching for high performance.
     """
-    
+    # The path carries the project UUID; queries and cache keys use the int PK.
+    project_id = project_ctx.project.id
+
     # Fetch images using optimized query
     cache = get_evaluation_cache()
     
@@ -666,15 +668,15 @@ async def get_project_evaluation(
     summary="Get per-class evaluation metrics"
 )
 async def get_class_metrics(
-    project_id: int = Path(...),
     model_version: Optional[str] = Query(None),
     reviewed_only: bool = Query(True),
-    ctx: RequestContext = Depends(get_request_context),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
     """
     Get performance breakdown by class.
     Uses database aggregation for optimal performance.
     """
+    project_id = project_ctx.project.id
     cache = get_evaluation_cache()
     query_builder = EvaluationQueryBuilder()
     async def compute():
@@ -699,15 +701,15 @@ async def get_class_metrics(
     summary="Quick dataset summary"
 )
 async def get_quick_summary(
-    project_id: int = Path(...),
     model_version: Optional[str] = Query(None),
-    ctx: RequestContext = Depends(get_request_context),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
     """
     Lightweight endpoint for dashboard/overview.
     Returns only aggregated metrics using database aggregation.
     """
-    
+    project_id = project_ctx.project.id
+
     cache = get_evaluation_cache()
     query_builder = EvaluationQueryBuilder()
 
@@ -744,16 +746,17 @@ async def health_check():
     summary="Export evaluation data"
 )
 async def export_evaluation(
-    project_id: int = Path(...),
     format: str = Query("json", pattern="^(json|csv)$"),
     model_version: Optional[str] = Query(None),
-    ctx: RequestContext = Depends(get_request_context),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
     """
     Export complete evaluation data.
     Supports JSON and CSV formats with streaming for large datasets.
     """
-    
+    project_id = project_ctx.project.id
+    export_name = project_ctx.project.project_id
+
     if format == "json":
         import orjson
         
@@ -775,7 +778,7 @@ async def export_evaluation(
         return StreamingResponse(
             generate(),
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=evaluation_{project_id}.json"}
+            headers={"Content-Disposition": f"attachment; filename=evaluation_{export_name}.json"}
         )
     
     elif format == "csv":
@@ -833,5 +836,5 @@ async def export_evaluation(
         return StreamingResponse(
             iter([csv_data]),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=evaluation_{project_id}.csv"}
+            headers={"Content-Disposition": f"attachment; filename=evaluation_{export_name}.csv"}
         )

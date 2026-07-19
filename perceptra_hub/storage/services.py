@@ -594,6 +594,19 @@ def store_encrypted_secret(secret_data: Dict[str, Any], encryption_key: str = No
     return encrypted_bytes.decode('utf-8')
 
 
+def get_local_media_url(storage_key: str) -> str:
+    """
+    Return a browser-accessible URL for a file in local storage, served by the
+    FastAPI endpoint GET /api/v1/media/files/{storage_path}.
+
+    The URL is relative by default so it works same-origin behind any proxy
+    (nginx in production, the Vite dev proxy in development). MEDIA_BASE_URL
+    is only needed when the browser must reach the backend directly.
+    """
+    base = getattr(settings, 'MEDIA_BASE_URL', '')
+    return f"{base}/api/v1/media/files/{storage_key}"
+
+
 def get_storage_adapter_for_profile(
     profile: StorageProfile,
     test_connection: bool = False

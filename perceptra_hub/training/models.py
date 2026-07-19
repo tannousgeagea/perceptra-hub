@@ -186,9 +186,10 @@ class TrainingSession(models.Model):
         
         if not self.log_file_key:
             return None
-        
+
         if self.storage_profile.backend == "local":
-            return f"http://localhost:81/{self.storage_profile.config['base_path']}/{self.log_file_key}"
+            from storage.services import get_local_media_url
+            return get_local_media_url(f"{self.storage_profile.config['base_path']}/{self.log_file_key}")
         
         adapter = get_storage_adapter_for_profile(self.storage_profile)
         presigned = adapter.generate_presigned_url(
@@ -319,9 +320,10 @@ class TrainingCheckpoint(models.Model):
         from storage.services import get_storage_adapter_for_profile
         
         storage_profile = self.training_session.storage_profile
-        
+
         if storage_profile.backend == "local":
-            return f"http://localhost:81/{storage_profile.config['base_path']}/{self.checkpoint_key}"
+            from storage.services import get_local_media_url
+            return get_local_media_url(f"{storage_profile.config['base_path']}/{self.checkpoint_key}")
         
         adapter = get_storage_adapter_for_profile(storage_profile)
         presigned = adapter.generate_presigned_url(

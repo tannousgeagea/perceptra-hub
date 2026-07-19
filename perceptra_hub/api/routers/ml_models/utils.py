@@ -21,9 +21,9 @@ def serialize_model_version(version: ModelVersion) -> dict:
     onnx_url = None
     if version.onnx_model_key:
         # Similar to checkpoint URL generation
-        from storage.services import get_storage_adapter_for_profile
+        from storage.services import get_storage_adapter_for_profile, get_local_media_url
         if version.storage_profile.backend == "local":
-            onnx_url = f"http://localhost:81/{version.storage_profile.config['base_path']}/{version.onnx_model_key}"
+            onnx_url = get_local_media_url(f"{version.storage_profile.config['base_path']}/{version.onnx_model_key}")
         else:
             adapter = get_storage_adapter_for_profile(version.storage_profile)
             presigned = adapter.generate_presigned_url(version.onnx_model_key, expiration=3600, method='GET')

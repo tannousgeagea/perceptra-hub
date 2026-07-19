@@ -103,7 +103,7 @@ def get_job_images(
                 'project_id': pi.project.name,
                 'image_id': pi.image.image_id,
                 'image_name': pi.image.image_name,
-                'image_url': 'http://localhost:81' + pi.image.image_file.url if os.getenv('DJANGO_STORAGE') != 'azure' else pi.image.image_file.url,
+                'image_url': pi.image.get_download_url(),
                 'created_at': pi.image.created_at.strftime(DATETIME_FORMAT),
                 'plant': pi.image.sensorbox.edge_box.plant.plant_name if pi.image.sensorbox else None,
                 'edge_box': pi.image.sensorbox.sensor_box_name if pi.image.sensorbox else None,
