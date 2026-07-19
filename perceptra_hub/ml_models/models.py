@@ -252,6 +252,14 @@ class ModelVersion(models.Model):
         help_text=_('Storage key for training logs file')
     )
     
+    # Model architecture variant
+    model_size = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        help_text=_('Model size variant (nano, small, medium, large, xlarge)')
+    )
+
     # Training configuration and results
     config = models.JSONField(
         default=dict,
@@ -263,7 +271,7 @@ class ModelVersion(models.Model):
         blank=True,
         help_text=_('Training metrics (loss, accuracy, mAP, etc.)')
     )
-    
+
     tags = models.ManyToManyField(
         ModelTag,
         blank=True,

@@ -70,7 +70,8 @@ def create_model_in_db(
             'learningRate': 'learning_rate',
             'epochs': 'epochs',
             'optimizer': 'optimizer',
-            'scheduler': 'scheduler'
+            'scheduler': 'scheduler',
+            'modelSize': 'model_size',
         }
         for key, value in data.config.items():
             normalized_key = key_mapping.get(key, key)

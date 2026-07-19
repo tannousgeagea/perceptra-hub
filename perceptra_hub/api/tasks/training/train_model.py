@@ -3,6 +3,7 @@ Celery task for training on platform's GPU workers.
 Handles the actual training execution using modular trainer system.
 """
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.utils import timezone
 import logging
 import traceback
@@ -12,7 +13,15 @@ from training.trainers.base import TrainingCallbacks
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, queue='gpu-training', max_retries=3)
+@shared_task(
+    bind=True,
+    queue='gpu-training',
+    max_retries=3,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=21600,   # 6-hour soft limit: raises SoftTimeLimitExceeded
+    time_limit=25200,        # 7-hour hard limit: kills the task
+)
 def train_model_on_platform_gpu(
     self,
     job_id: str,
@@ -33,7 +42,10 @@ def train_model_on_platform_gpu(
     from training.trainers.base import TrainingConfig, TrainingCallbacks
     
     logger.info(f"Starting training for job {job_id}")
-    
+
+    dataset_path = None
+    output_dir = None
+
     try:
         # 1. Get model version and training session
         model_version = ModelVersion.objects.select_related(
@@ -63,7 +75,7 @@ def train_model_on_platform_gpu(
             model_version.dataset_version,
             model_version.storage_profile
         )
-        
+
         # 4. Setup output directory
         output_dir = Path(f"/tmp/training/{job_id}")
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -154,50 +166,86 @@ def train_model_on_platform_gpu(
         training_session.current_metrics = result.final_metrics.to_dict()
         training_session.save()
         
-        # 12. Cleanup
-        cleanup_temp_files(dataset_path, output_dir)
-        
         logger.info(f"Training completed successfully for job {job_id}")
-        
+
         return {
             'status': 'success',
             'job_id': job_id,
             'model_version_id': model_version_id,
             'metrics': result.best_metrics.to_dict()
         }
-        
+
+    except SoftTimeLimitExceeded as e:
+        error_msg = "Training exceeded the 6-hour time limit and was terminated"
+        error_trace = traceback.format_exc()
+        logger.error(f"Soft time limit exceeded for job {job_id}")
+        try:
+            training_session.status = 'failed'
+            training_session.error_message = error_msg
+            training_session.error_traceback = error_trace
+            training_session.completed_at = timezone.now()
+            training_session.save()
+            model_version.status = 'failed'
+            model_version.error_message = error_msg
+            model_version.save()
+        except Exception:
+            pass
+        raise
+
     except Exception as e:
         error_msg = str(e)
         error_trace = traceback.format_exc()
-        
+
         logger.error(f"Training failed for job {job_id}: {error_msg}")
         logger.error(error_trace)
-        
-        # Update session and version
-        training_session.status = 'failed'
-        training_session.error_message = error_msg
-        training_session.error_traceback = error_trace
-        training_session.completed_at = timezone.now()
-        training_session.save()
-        
-        model_version.status = 'failed'
-        model_version.error_message = error_msg
-        model_version.save()
-        
-        # Retry on transient errors
-        if 'CUDA out of memory' in error_msg or 'Connection' in error_msg:
-            raise self.retry(exc=e, countdown=300)  # Retry after 5 min
-        
+
+        try:
+            training_session.status = 'failed'
+            training_session.error_message = error_msg
+            training_session.error_traceback = error_trace
+            training_session.completed_at = timezone.now()
+            training_session.save()
+
+            model_version.status = 'failed'
+            model_version.error_message = error_msg
+            model_version.save()
+        except Exception:
+            pass
+
+        # Retry on transient errors with exponential backoff
+        import torch
+        is_oom = (
+            (hasattr(torch.cuda, 'OutOfMemoryError') and isinstance(e, torch.cuda.OutOfMemoryError))
+            or 'CUDA out of memory' in error_msg
+        )
+        is_transient = is_oom or isinstance(e, (ConnectionError, TimeoutError, OSError))
+        if is_transient:
+            countdown = min(300 * (self.request.retries + 1), 1800)
+            raise self.retry(exc=e, countdown=countdown)
+
         raise
+
+    finally:
+        cleanup_temp_files(dataset_path, output_dir)
 
 
 class PlatformTrainingCallbacks(TrainingCallbacks):
     """Callbacks for tracking training progress on platform"""
-    
+
     def __init__(self, training_session, celery_task):
         self.training_session = training_session
         self.celery_task = celery_task
-    
+
+    def on_train_error(self, epoch: int, error: Exception):
+        """Persist error details immediately so the UI shows them even before the task re-raises."""
+        try:
+            import traceback as _tb
+            self.training_session.error_message = str(error)
+            self.training_session.error_traceback = _tb.format_exc()
+            self.training_session.save(update_fields=['error_message', 'error_traceback'])
+        except Exception:
+            pass
+
     def on_epoch_end(self, epoch: int, metrics):
         """Called after each epoch"""
         from training.models import TrainingSession

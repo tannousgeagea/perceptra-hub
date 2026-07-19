@@ -11,6 +11,55 @@ from .base import BaseTrainer, TrainingConfig, TrainingCallbacks
 
 logger = logging.getLogger(__name__)
 
+# Maps human-readable size labels to per-framework variant strings
+_MODEL_SIZE_MAPPINGS: Dict[str, Dict[str, str]] = {
+    'ultralytics': {
+        'nano': 'n', 'small': 's', 'medium': 'm', 'large': 'l', 'xlarge': 'x',
+        # pass-through single-char variants
+        'n': 'n', 's': 's', 'm': 'm', 'l': 'l', 'x': 'x',
+    },
+    'yolo': {
+        'nano': 'n', 'small': 's', 'medium': 'm', 'large': 'l', 'xlarge': 'x',
+        'n': 'n', 's': 's', 'm': 'm', 'l': 'l', 'x': 'x',
+    },
+    'rfdetr': {
+        'small': 'rfdetr_base', 'medium': 'rfdetr_base', 'large': 'rfdetr_large',
+        'rfdetr_base': 'rfdetr_base', 'rfdetr_large': 'rfdetr_large',
+    },
+    'rf-detr': {
+        'small': 'rfdetr_base', 'medium': 'rfdetr_base', 'large': 'rfdetr_large',
+        'rfdetr_base': 'rfdetr_base', 'rfdetr_large': 'rfdetr_large',
+    },
+    'rtdetr': {
+        'small': 'rfdetr_base', 'medium': 'rfdetr_base', 'large': 'rfdetr_large',
+        'rfdetr_base': 'rfdetr_base', 'rfdetr_large': 'rfdetr_large',
+    },
+    'rt-detr': {
+        'small': 'rfdetr_base', 'medium': 'rfdetr_base', 'large': 'rfdetr_large',
+        'rfdetr_base': 'rfdetr_base', 'rfdetr_large': 'rfdetr_large',
+    },
+}
+
+
+def _normalize_model_size(framework: str, size: str) -> str:
+    """Translate human-readable size to the variant string expected by the trainer."""
+    mapping = _MODEL_SIZE_MAPPINGS.get(framework.lower(), {})
+    return mapping.get(size.lower(), size) if size else size
+
+
+def validate_trainer_config(config: TrainingConfig) -> None:
+    """Raise ValueError if essential training config fields are missing or invalid."""
+    if config.epochs < 1:
+        raise ValueError(f"epochs must be >= 1, got {config.epochs}")
+    if config.batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {config.batch_size}")
+    if config.learning_rate <= 0:
+        raise ValueError(f"learning_rate must be > 0, got {config.learning_rate}")
+    if not config.dataset_path:
+        raise ValueError("dataset_path is required")
+    if not config.output_dir:
+        raise ValueError("output_dir is required")
+
 
 class TrainerRegistry:
     """
@@ -143,12 +192,21 @@ class TrainerFactory:
             )
         
         trainer_class = TrainerRegistry.get(framework)
-        
+
+        # Validate config before instantiation
+        validate_trainer_config(config)
+
+        # Normalize model_size in model_params to the framework-specific variant string
+        if config.model_params.get('model_size'):
+            config.model_params['model_size'] = _normalize_model_size(
+                framework, config.model_params['model_size']
+            )
+
         logger.info(
-            f"Creating trainer: {trainer_class.__name__} "
-            f"for task: {task}"
+            f"Creating trainer: {trainer_class.__name__} for task: {task}, "
+            f"model_size={config.model_params.get('model_size', 'default')}"
         )
-        
+
         return trainer_class(task=task, config=config, callbacks=callbacks)
     
     @staticmethod

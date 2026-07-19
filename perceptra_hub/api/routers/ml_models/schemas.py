@@ -50,6 +50,7 @@ class ModelVersionResponse(BaseModel):
     version_name: Optional[str] = None
     status: str
     deployment_status: str
+    model_size: str = ""
     metrics: dict = Field(default_factory=dict)
     config: dict = Field(default_factory=dict)
     dataset: Optional[DatasetInfoResponse] = None
@@ -57,7 +58,7 @@ class ModelVersionResponse(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     deployed_at: Optional[datetime] = None
-    
+
     class Config:
         from_attributes = True
 
@@ -94,6 +95,7 @@ class ModelListResponse(BaseModel):
     version_count: int
     latest_version_number: Optional[int] = None
     latest_status: Optional[str] = None
+    latest_version_model_size: Optional[str] = None
     has_production_version: bool = False
     production_version_number: Optional[int] = None
     production_version_id: Optional[str] = None
