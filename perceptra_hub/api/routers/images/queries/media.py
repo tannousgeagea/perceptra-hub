@@ -36,7 +36,16 @@ async def serve_local_file(request: Request, storage_path):
     'Range: bytes=N-M' when the user scrubs the timeline).
     """
     
-    full_path = Path(storage_path)
+    from django.conf import settings
+
+    # Stored keys are absolute filesystem paths, but the leading slash may be
+    # lost in transit (nginx merges "//" into "/"), so root the path ourselves.
+    # resolve() normalizes ".." segments and symlinks before the allowlist
+    # check, so the endpoint can only ever serve files under MEDIA_SERVE_ROOTS.
+    full_path = (Path("/") / storage_path.lstrip("/")).resolve()
+    allowed_roots = [Path(root).resolve() for root in settings.MEDIA_SERVE_ROOTS]
+    if not any(full_path.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File not found")
 
     if not full_path.exists() or not full_path.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File not found")
