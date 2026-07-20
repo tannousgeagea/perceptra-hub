@@ -360,9 +360,10 @@ class ModelVersion(models.Model):
         
         if not self.checkpoint_key:
             return None
-        
+
         if self.storage_profile.backend == "local":
-            return f"http://localhost:81/{self.storage_profile.config['base_path']}/{self.checkpoint_key}"
+            from storage.services import get_local_media_url
+            return get_local_media_url(f"{self.storage_profile.config['base_path']}/{self.checkpoint_key}")
         
         adapter = get_storage_adapter_for_profile(self.storage_profile)
         presigned = adapter.generate_presigned_url(
@@ -378,9 +379,10 @@ class ModelVersion(models.Model):
         
         if not self.training_logs_key:
             return None
-        
+
         if self.storage_profile.backend == "local":
-            return f"http://localhost:81/{self.storage_profile.config['base_path']}/{self.training_logs_key}"
+            from storage.services import get_local_media_url
+            return get_local_media_url(f"{self.storage_profile.config['base_path']}/{self.training_logs_key}")
         
         adapter = get_storage_adapter_for_profile(self.storage_profile)
         presigned = adapter.generate_presigned_url(

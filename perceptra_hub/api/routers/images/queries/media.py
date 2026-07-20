@@ -18,19 +18,13 @@ def _media_url(storage_backend: str, storage_key: str) -> str:
     """Return a browser-accessible URL for a stored file.
 
     Cloud backends (Azure, S3, MinIO) already return HTTP presigned URLs.
-    Local storage serves files through the built-in /api/v1/media/files/ endpoint.
-
-    In production (same-origin, behind nginx) the URL is relative so nginx can
-    proxy it to the backend transparently.
-
-    In dev Docker the Vite proxy runs inside its container and cannot reach the
-    backend via localhost. Setting MEDIA_BASE_URL=http://localhost:29085 on the
-    backend makes the URL absolute so the browser hits the backend port directly.
+    Local storage serves files through the built-in /api/v1/media/files/
+    endpoint via a relative URL, which works same-origin behind any proxy
+    (nginx in production, the Vite dev proxy in development).
     """
     if storage_backend == "local":
-        from django.conf import settings
-        base = getattr(settings, 'MEDIA_BASE_URL', '')
-        return f"{base}/api/v1/media/files/{storage_key}"
+        from storage.services import get_local_media_url
+        return get_local_media_url(storage_key)
     return ""  # caller will call get_download_url for cloud backends
 
 
@@ -42,7 +36,16 @@ async def serve_local_file(request: Request, storage_path):
     'Range: bytes=N-M' when the user scrubs the timeline).
     """
     
-    full_path = Path(storage_path)
+    from django.conf import settings
+
+    # Stored keys are absolute filesystem paths, but the leading slash may be
+    # lost in transit (nginx merges "//" into "/"), so root the path ourselves.
+    # resolve() normalizes ".." segments and symlinks before the allowlist
+    # check, so the endpoint can only ever serve files under MEDIA_SERVE_ROOTS.
+    full_path = (Path("/") / storage_path.lstrip("/")).resolve()
+    allowed_roots = [Path(root).resolve() for root in settings.MEDIA_SERVE_ROOTS]
+    if not any(full_path.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File not found")
 
     if not full_path.exists() or not full_path.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File not found")
