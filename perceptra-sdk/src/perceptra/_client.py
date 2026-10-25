@@ -59,6 +59,7 @@ class Perceptra(_BaseClient):
         from perceptra.resources.tags import Tags
         from perceptra.resources.api_keys import APIKeys
         from perceptra.resources.storage import Storage
+        from perceptra.resources.ingest import Ingest
 
         self.projects = Projects(self)
         self.images = Images(self)
@@ -72,6 +73,7 @@ class Perceptra(_BaseClient):
         self.tags = Tags(self)
         self.api_keys = APIKeys(self)
         self.storage = Storage(self)
+        self.ingest = Ingest(self)
 
     def _request(
         self,

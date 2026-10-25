@@ -58,6 +58,14 @@ class Storage(SyncAPIResource):
     def test_connection(self, profile_id: str) -> dict:
         return self._client._request("POST", f"/storage/profiles/{profile_id}/test", cast_to=dict)
 
+    def rotate_credentials(self, profile_id: str, credentials: dict, *, test_before_save: bool = True) -> dict:
+        """Replace a profile's credential in place (admin). `credentials` is one of the
+        typed credential objects, e.g. {"type": "sas_token", "sas_token": "sv=...&sp=rl&sig=..."}."""
+        return self._client._request(
+            "PUT", f"/storage/profiles/{profile_id}/credentials",
+            body={"credentials": credentials, "test_before_save": test_before_save}, cast_to=dict,
+        )
+
 
 class AsyncStorage(AsyncAPIResource):
 
@@ -107,3 +115,9 @@ class AsyncStorage(AsyncAPIResource):
 
     async def test_connection(self, profile_id: str) -> dict:
         return await self._client._request("POST", f"/storage/profiles/{profile_id}/test", cast_to=dict)
+
+    async def rotate_credentials(self, profile_id: str, credentials: dict, *, test_before_save: bool = True) -> dict:
+        return await self._client._request(
+            "PUT", f"/storage/profiles/{profile_id}/credentials",
+            body={"credentials": credentials, "test_before_save": test_before_save}, cast_to=dict,
+        )

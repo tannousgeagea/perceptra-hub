@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 
 from common_utils.data.annotation.raw import save_annotations
+from api.dependencies import RequestContext, require_permission
 
 from images.models import Image
 from projects.models import (
@@ -64,14 +65,22 @@ class ApiRequest(BaseModel):
 @router.api_route(
     "/annotations", methods=["POST"], tags=["Annotations"]
 )
-def upload_raw_annotations(response: Response, request: ApiRequest = Depends()):
+def upload_raw_annotations(
+    response: Response,
+    request: ApiRequest = Depends(),
+    ctx: RequestContext = Depends(require_permission("write")),
+):
+    # Legacy raw endpoint: authenticated, and every lookup scoped to the caller's
+    # organization (projects are looked up by name, which is not globally unique).
     results = {
         'status_code': 'ok',
         'status_description': '',
         'details': []
     }
+    org_projects = Project.objects.filter(organization=ctx.organization, is_deleted=False)
+    org_images = Image.objects.filter(organization=ctx.organization)
     try:
-        if not Project.objects.filter(name=request.project_name).exists():
+        if not org_projects.filter(name=request.project_name).exists():
             results['error'] = {
                 'status_code': 'bad-request',
                 'status_description': f'Project name {request.project_name} does not exist',
@@ -80,7 +89,7 @@ def upload_raw_annotations(response: Response, request: ApiRequest = Depends()):
             response.status_code = status.HTTP_404_NOT_FOUND
             return results
         
-        if not Image.objects.filter(image_id=request.image_id).exists():
+        if not org_images.filter(image_id=request.image_id).exists():
             results['error'] = {
                 'status_code': 'bad-request',
                 'status_description': f'Image id {request.image_id} does not exist',
@@ -98,8 +107,8 @@ def upload_raw_annotations(response: Response, request: ApiRequest = Depends()):
             response.status_code = status.HTTP_404_NOT_FOUND
             return results
         
-        project = Project.objects.get(name=request.project_name)
-        image = Image.objects.get(image_id=request.image_id)
+        project = org_projects.filter(name=request.project_name).first()
+        image = org_images.get(image_id=request.image_id)
         annotation_type = AnnotationType.objects.get(name=request.annotation_type)
         
         project_image = ProjectImage.objects.filter(project=project, image=image)

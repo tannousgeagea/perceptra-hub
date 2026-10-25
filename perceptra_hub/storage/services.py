@@ -6,6 +6,8 @@ from django.conf import settings
 import logging
 import json
 import os
+import threading
+import time
 
 from perceptra_storage import (
     get_storage_adapter,
@@ -13,7 +15,7 @@ from perceptra_storage import (
     StorageError,
     StorageConnectionError,
 )
-from .models import StorageProfile, SecretRef, EncryptedSecret
+from .models import StorageProfile, SecretRef, EncryptedSecret, StorageAccessMode
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +25,11 @@ __all__ = [
     'StorageServiceError',
     'SecretRetrievalError',
     'get_storage_adapter_for_profile',
+    'invalidate_profile_adapter',
     'test_storage_profile_connection',
     'get_default_storage_adapter',
+    'get_default_storage_profile',
+    'get_writable_storage_profile',
     'validate_storage_config',
     'StorageManager',
     'retrieve_credentials_from_secret_ref',
@@ -399,9 +404,8 @@ def _retrieve_from_local_encrypted(secret_ref: SecretRef) -> Dict[str, Any]:
                     )
                 value = secret_data[secret_ref.key]
                 return value if isinstance(value, dict) else {'value': value}
-            
-            
-            logging.info(secret_data)
+
+            # Never log secret_data: it is the decrypted credential.
             return secret_data if isinstance(secret_data, dict) else {'value': secret_data}
             
         except json.JSONDecodeError:
@@ -603,11 +607,62 @@ def get_local_media_url(storage_key: str) -> str:
     (nginx in production, the Vite dev proxy in development). MEDIA_BASE_URL
     is only needed when the browser must reach the backend directly.
     """
+    from .signing import signed_query
+
     base = getattr(settings, 'MEDIA_BASE_URL', '')
     # storage_key is usually an absolute path (e.g. /media/org/...). Strip the
     # leading slash so the URL never contains "//" — proxies like nginx merge
     # consecutive slashes, which would silently change the path.
-    return f"{base}/api/v1/media/files/{storage_key.lstrip('/')}"
+    path = f"/api/v1/media/files/{storage_key.lstrip('/')}"
+    # Signed so the route can require it (MEDIA_REQUIRE_SIGNED_URLS).
+    return f"{base}{path}?{signed_query(path, LOCAL_MEDIA_URL_TTL_S)}"
+
+
+ADAPTER_CACHE_TTL_S = int(os.getenv('STORAGE_ADAPTER_CACHE_TTL_S', '300'))
+# Local media URLs are stored in places (project thumbnails): keep them valid long.
+LOCAL_MEDIA_URL_TTL_S = int(os.getenv('LOCAL_MEDIA_URL_TTL_S', str(7 * 24 * 3600)))
+_adapter_cache: Dict[tuple, tuple] = {}
+_adapter_cache_lock = threading.Lock()
+
+
+def _adapter_cache_key(profile: StorageProfile) -> tuple:
+    # updated_at changes on every profile save, including credential rotation.
+    return (profile.pk, profile.updated_at.isoformat() if profile.updated_at else '', profile.credential_ref_id)
+
+
+def invalidate_profile_adapter(profile: StorageProfile) -> None:
+    """Drop every cached adapter of `profile` (after a config or credential change)."""
+    with _adapter_cache_lock:
+        for key in [k for k in _adapter_cache if k[0] == profile.pk]:
+            _adapter_cache.pop(key, None)
+
+
+def get_default_storage_profile(organization) -> Optional[StorageProfile]:
+    """The organization's default profile for writes. Never an external
+    (read-only) profile — model validation already forbids that; this guards
+    rows written before the rule existed."""
+    return StorageProfile.objects.filter(
+        organization=organization, is_default=True, is_active=True,
+    ).exclude(access_mode=StorageAccessMode.EXTERNAL_READONLY).first()
+
+
+def get_writable_storage_profile(organization, preferred: Optional[StorageProfile] = None,
+                                 fallback_to_any: bool = False) -> Optional[StorageProfile]:
+    """Where Perceptra may write (uploads, dataset exports, model artifacts):
+    `preferred` when it is an active managed profile of the organization, else
+    the default, else (fallback_to_any) the first active managed profile.
+    Never an external profile."""
+    if (
+        preferred is not None and preferred.is_active and not preferred.is_external
+        and preferred.organization_id == organization.id
+    ):
+        return preferred
+    profile = get_default_storage_profile(organization)
+    if profile is None and fallback_to_any:
+        profile = StorageProfile.objects.filter(organization=organization, is_active=True).exclude(
+            access_mode=StorageAccessMode.EXTERNAL_READONLY,
+        ).order_by('id').first()
+    return profile
 
 
 def get_storage_adapter_for_profile(
@@ -616,33 +671,46 @@ def get_storage_adapter_for_profile(
 ) -> BaseStorageAdapter:
     """
     Create a storage adapter instance from a StorageProfile.
-    
+
+    Adapters are cached per process for ADAPTER_CACHE_TTL_S, keyed by the
+    profile and its last change, so listing a page of images does not
+    decrypt the credential once per image. External profiles get a read-only
+    adapter: uploads and deletes raise StoragePermissionError.
+
     Args:
         profile: StorageProfile model instance
         test_connection: Whether to test connection before returning adapter
-    
+            (always builds a fresh adapter)
+
     Returns:
         Initialized storage adapter
-    
+
     Raises:
         StorageServiceError: If adapter creation or connection test fails
-    
+
     Example:
         >>> profile = StorageProfile.objects.get(tenant=tenant, is_default=True)
         >>> adapter = get_storage_adapter_for_profile(profile)
         >>> adapter.upload_file(file_obj, 'data.csv')
     """
+    cache_key = _adapter_cache_key(profile) if profile.pk else None
+    if cache_key and not test_connection:
+        hit = _adapter_cache.get(cache_key)
+        if hit and hit[0] > time.monotonic():
+            return hit[1]
+
     try:
         # Retrieve credentials if needed
         credentials = None
         if profile.credential_ref:
             credentials = retrieve_credentials_from_secret_ref(profile.credential_ref)
-        
+
         # Create adapter
         adapter = get_storage_adapter(
             backend=profile.backend,
             config=profile.config,
-            credentials=credentials
+            credentials=credentials,
+            read_only=profile.is_external,
         )
         
         # Test connection if requested
@@ -655,9 +723,17 @@ def get_storage_adapter_for_profile(
                 raise StorageServiceError(
                     f"Storage connection test failed: {e}"
                 ) from e
-        
+
+        if cache_key:
+            with _adapter_cache_lock:
+                # A changed profile leaves stale keys behind: drop them.
+                for key in [k for k in _adapter_cache if k[0] == profile.pk and k != cache_key]:
+                    _adapter_cache.pop(key, None)
+                _adapter_cache[cache_key] = (time.monotonic() + ADAPTER_CACHE_TTL_S, adapter)
         return adapter
-        
+
+    except StorageServiceError:
+        raise
     except StorageError as e:
         logger.error(f"Failed to create adapter for profile {profile.name}: {e}")
         raise StorageServiceError(
@@ -696,31 +772,24 @@ def test_storage_profile_connection(profile: StorageProfile) -> tuple[bool, Opti
         return False, f"Unexpected error: {e}"
 
 
-def get_default_storage_adapter(tenant) -> Optional[BaseStorageAdapter]:
+def get_default_storage_adapter(organization) -> Optional[BaseStorageAdapter]:
     """
-    Get storage adapter for tenant's default storage profile.
-    
+    Get storage adapter for the organization's default storage profile.
+
     Args:
-        tenant: Tenant instance
-    
+        organization: Organization instance
+
     Returns:
         Storage adapter for default profile, or None if no default exists
-    
+
     Raises:
         StorageServiceError: If adapter creation fails
     """
-    try:
-        profile = StorageProfile.objects.get(tenant=tenant, is_default=True)
-        return get_storage_adapter_for_profile(profile)
-        
-    except StorageProfile.DoesNotExist:
-        logger.warning(f"No default storage profile for tenant: {tenant.name}")
+    profile = get_default_storage_profile(organization)
+    if profile is None:
+        logger.warning(f"No default storage profile for organization: {organization}")
         return None
-    except StorageProfile.MultipleObjectsReturned:
-        logger.error(f"Multiple default storage profiles for tenant: {tenant.name}")
-        raise StorageServiceError(
-            f"Multiple default storage profiles found for tenant {tenant.name}"
-        )
+    return get_storage_adapter_for_profile(profile)
 
 
 def validate_storage_config(backend: str, config: Dict[str, Any]) -> tuple[bool, Optional[str]]:

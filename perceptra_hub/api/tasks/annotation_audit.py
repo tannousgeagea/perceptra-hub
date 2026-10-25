@@ -30,11 +30,12 @@ def find_matching_ground_truth(prediction):
     """
     from annotations.models import Annotation
     
-    # Get all manual annotations on same image with same class
+    # Ground truth on same image with same class: manual labels and labels
+    # verified by an external system
     candidates = Annotation.objects.filter(
         project_image=prediction.project_image,
         annotation_class=prediction.annotation_class,
-        annotation_source='manual',
+        annotation_source__in=('manual', 'imported'),
         is_active=True,
         is_deleted=False
     )

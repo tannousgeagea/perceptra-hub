@@ -13,6 +13,7 @@ from api.dependencies import get_project_context, ProjectContext
 from api.routers.versions.schemas import VersionCreate, VersionResponse
 from projects.models import Project, ProjectImage, Version, VersionImage
 from storage.models import StorageProfile
+from storage.services import get_default_storage_profile
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/projects")
@@ -47,7 +48,7 @@ async def create_version(
         if data.storage_profile_id:
             try:
                 storage_profile = StorageProfile.objects.get(
-                    id=data.storage_profile_id,
+                    storage_profile_id=data.storage_profile_id,
                     organization=project.organization,
                     is_active=True
                 )
@@ -56,14 +57,15 @@ async def create_version(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Storage profile {data.storage_profile_id} not found"
                 )
+            if storage_profile.is_external:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Dataset exports cannot be written to an external (read-only) storage profile",
+                )
         else:
-            # Use default storage profile
-            storage_profile = StorageProfile.objects.filter(
-                organization=project.organization,
-                is_default=True,
-                is_active=True
-            ).first()
-            
+            # Use default storage profile (never an external one)
+            storage_profile = get_default_storage_profile(project.organization)
+
             if not storage_profile:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

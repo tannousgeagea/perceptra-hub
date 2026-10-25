@@ -218,11 +218,13 @@ class StreamingZipExporter:
     
     def stream_to_storage(self, storage_key: str):
         """Stream zip directly to storage."""
-        # Get storage adapter
-        storage_profile = self.version.project.organization.storage_profiles.filter(
-            is_default=True
-        ).first()
-        
+        # The version's own profile, else the default — never an external one.
+        from storage.services import get_writable_storage_profile
+
+        storage_profile = get_writable_storage_profile(
+            self.version.project.organization, preferred=self.version.storage_profile,
+        )
+
         if not storage_profile:
             raise ValueError("No default storage profile found")
         

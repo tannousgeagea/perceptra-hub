@@ -42,7 +42,16 @@ class StorageBackend(models.TextChoices):
     AZURE = 'azure', _('Azure Blob Storage')
     S3 = 's3', _('Amazon S3')
     MINIO = 'minio', _('MinIO / S3-compatible')
+    GCS = 'gcs', _('Google Cloud Storage')
     LOCAL = 'local', _('Local Filesystem')
+
+
+class StorageAccessMode(models.TextChoices):
+    """Who owns the data behind a storage profile."""
+    MANAGED = 'managed', _('Managed — Perceptra writes and deletes files')
+    EXTERNAL_READONLY = 'external_readonly', _(
+        'External (read-only) — files belong to another system and are only referenced'
+    )
 
 
 class SecretProvider(models.TextChoices):
@@ -177,6 +186,12 @@ class StorageProfile(models.Model):
     Each organization can have multiple storage profiles for different purposes
     (e.g., raw data, processed data, models). One profile can be marked
     as default per organization.
+
+    access_mode external_readonly connects storage owned by another system:
+    images are registered by reference (POST /api/v1/ingest/images), never
+    uploaded, copied or deleted. Its adapter refuses writes and deletes
+    (perceptra_storage.ReadOnlyStorageAdapter) and it can never be the
+    default profile, so no upload, export or model artifact lands in it.
     """
     storage_profile_id = models.UUIDField(
         default=uuid.uuid4,
@@ -205,6 +220,12 @@ class StorageProfile(models.Model):
     is_default = models.BooleanField(
         default=False,
         help_text=_('Whether this is the default storage profile for the tenant')
+    )
+    access_mode = models.CharField(
+        max_length=20,
+        choices=StorageAccessMode.choices,
+        default=StorageAccessMode.MANAGED,
+        help_text=_('managed: Perceptra owns the files; external_readonly: referenced only')
     )
     config = models.JSONField(
         default=dict,
@@ -267,6 +288,12 @@ class StorageProfile(models.Model):
                 'credential_ref': _('Credential reference must belong to the same organization')
             })
         
+        # External storage is only referenced: nothing may be written to it
+        if self.is_default and self.is_external:
+            raise ValidationError({
+                'is_default': _('An external (read-only) storage profile cannot be the default')
+            })
+
         # Validate only one default per organization
         if self.is_default:
             existing_default = StorageProfile.objects.filter(
@@ -288,9 +315,15 @@ class StorageProfile(models.Model):
             StorageBackend.AZURE: ['container_name', 'account_name'],
             StorageBackend.S3: ['bucket_name'],
             StorageBackend.MINIO: ['bucket_name', 'endpoint_url'],
+            StorageBackend.GCS: ['bucket_name'],
             StorageBackend.LOCAL: ['base_path'],
         }
         return backend_requirements.get(self.backend, [])
+
+    @property
+    def is_external(self) -> bool:
+        """Files belong to another system: never write, copy or delete them."""
+        return self.access_mode == StorageAccessMode.EXTERNAL_READONLY
 
     def save(self, *args, **kwargs):
         """Override save to run validation."""

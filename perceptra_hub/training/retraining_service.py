@@ -212,9 +212,9 @@ class RetrainingService:
                 or 0
             ) + 1
 
-            storage_profile = model.project.organization.storage_profiles.filter(
-                is_default=True
-            ).first()
+            from storage.services import get_writable_storage_profile
+
+            storage_profile = get_writable_storage_profile(model.project.organization)
 
             model_version = ModelVersion.objects.create(
                 version_id=str(uuid.uuid4()),

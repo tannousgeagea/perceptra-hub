@@ -59,6 +59,7 @@ class AsyncPerceptra(_BaseClient):
         from perceptra.resources.tags import AsyncTags
         from perceptra.resources.api_keys import AsyncAPIKeys
         from perceptra.resources.storage import AsyncStorage
+        from perceptra.resources.ingest import AsyncIngest
 
         self.projects = AsyncProjects(self)
         self.images = AsyncImages(self)
@@ -72,6 +73,7 @@ class AsyncPerceptra(_BaseClient):
         self.tags = AsyncTags(self)
         self.api_keys = AsyncAPIKeys(self)
         self.storage = AsyncStorage(self)
+        self.ingest = AsyncIngest(self)
 
     async def _request(
         self,

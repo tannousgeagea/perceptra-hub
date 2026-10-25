@@ -71,7 +71,7 @@ class COCOExporter(BaseExporter):
             ).select_related('annotation_class')
             
             if not self.config.include_predictions:
-                annotations = annotations.filter(annotation_source='manual')
+                annotations = annotations.filter(annotation_source__in=('manual', 'imported'))
             
             if not annotations.exists():
                 continue

@@ -32,6 +32,7 @@ from annotations.models import (
     AnnotationGroup,
     AnnotationType
 )
+from api.dependencies import RequestContext, require_permission
 
 
 def xyxy2xywh(xyxy):
@@ -71,9 +72,21 @@ class SaveAnnotationsRequest(BaseModel):
 
 @router.api_route(
     "/annotations/{project_id}/{image_id}", methods=["POST"], tags=["Annotations"])
-def save_annotations(project_id: str, image_id: str, request: AnnotationData):
+def save_annotations(
+    project_id: str,
+    image_id: str,
+    request: AnnotationData,
+    ctx: RequestContext = Depends(require_permission("write")),
+):
     try:
-        project_image = ProjectImage.objects.get(project__name=project_id, image__image_id=image_id)
+        # Legacy endpoint: authenticated and scoped to the caller's organization
+        # (project_id here is the project *name*).
+        project_image = ProjectImage.objects.get(
+            project__name=project_id,
+            project__organization=ctx.organization,
+            project__is_deleted=False,
+            image__image_id=image_id,
+        )
 
         with transaction.atomic():
             annotation_data = request
@@ -102,7 +115,10 @@ def save_annotations(project_id: str, image_id: str, request: AnnotationData):
                 )
             
             annotation_type = AnnotationType.objects.get(name="bounding_boxes")
-            if not Annotation.objects.filter(annotation_uid=annotation_data.id).exists():
+            existing = Annotation.objects.filter(annotation_uid=annotation_data.id).first()
+            if existing is not None and existing.project_image_id != project_image.id:
+                raise HTTPException(status_code=409, detail="annotation id belongs to another image")
+            if existing is None:
                 Annotation.objects.create(
                     project_image=project_image,
                     annotation_type=annotation_type,
@@ -124,7 +140,7 @@ def save_annotations(project_id: str, image_id: str, request: AnnotationData):
                     
                 return {"message": "Annotations created successfully."}
             
-            annotation = Annotation.objects.filter(annotation_uid=annotation_data.id).first()
+            annotation = existing
             annotation.data = [
                     annotation_data.x,
                     annotation_data.y,
@@ -145,5 +161,9 @@ def save_annotations(project_id: str, image_id: str, request: AnnotationData):
         
         
 
+    except HTTPException:
+        raise
+    except ProjectImage.DoesNotExist:
+        raise HTTPException(status_code=404, detail="Image not found in this project")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
