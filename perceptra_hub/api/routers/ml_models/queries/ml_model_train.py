@@ -101,20 +101,14 @@ async def trigger_training(
     )()
     version_number = (last_version.version_number + 1) if last_version else 1
     
-    # Get storage profile (use default or first active)
+    # Get storage profile (default, else first active managed one — model
+    # artifacts are written there, so never an external read-only profile)
+    from storage.services import get_writable_storage_profile
+
     storage_profile = await sync_to_async(
-        lambda: ctx.organization.storage_profiles.filter(
-            is_default=True,
-            is_active=True
-        ).first()
+        lambda: get_writable_storage_profile(ctx.organization, fallback_to_any=True)
     )()
-    
-    if not storage_profile:
-        # Fallback to first active profile
-        storage_profile = await sync_to_async(
-            lambda: ctx.organization.storage_profiles.filter(is_active=True).first()
-        )()
-    
+
     if not storage_profile:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

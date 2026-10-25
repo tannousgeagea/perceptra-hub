@@ -66,6 +66,10 @@ class Annotation(models.Model):
     ANNOTATION_SOURCE_CHOICES = [
         ('manual', 'Manual Annotation'),
         ('prediction', 'Model Prediction'),
+        # Verified ground truth registered by an external system
+        # (POST /api/v1/ingest/images): exported like manual labels, never
+        # audited as a missed detection.
+        ('imported', 'Imported (verified externally)'),
     ]
     
     project_image = models.ForeignKey(
@@ -165,9 +169,29 @@ class Annotation(models.Model):
         help_text="e.g. 'yolov8-large-v2.1'"
     )
 
+    # Annotations registered by an external system (ingest API)
+    external_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Identifier in the system that registered this annotation (idempotency key per image)"
+    )
+    meta = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Provenance from the registering system, plus 'ingested': the class/box it last "
+                  "wrote (a difference means a person edited the annotation since)"
+    )
+
     class Meta:
         db_table = 'annotation'
         verbose_name_plural = 'Annotations'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['project_image', 'external_id'], name='uniq_annotation_image_external_id',
+                condition=models.Q(external_id__isnull=False),
+            ),
+        ]
         indexes = [
             models.Index(fields=['project_image', 'is_active']),
             models.Index(fields=['project_image', 'is_deleted']),

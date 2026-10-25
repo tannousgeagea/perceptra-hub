@@ -39,8 +39,10 @@ from api.routers.storage.schemas import (
 from api.dependencies import get_current_organization, get_db
 from storage.models import StorageProfile, SecretRef
 from organizations.models import Organization
+from django.db.models import ProtectedError
 from storage.services import (
     get_storage_adapter_for_profile,
+    invalidate_profile_adapter,
     test_storage_profile_connection,
     get_default_storage_adapter,
     StorageServiceError,
@@ -209,10 +211,16 @@ def create_storage_profile_record(organization: Organization, profile_data: Stor
         backend=profile_data.backend,
         region=profile_data.region,
         is_default=profile_data.is_default,
+        access_mode=profile_data.access_mode.value,
         config=profile_data.config,
         credential_ref=credential_ref
     )
-    
+    if profile.is_default and profile.is_external:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An external (read-only) storage profile cannot be the default",
+        )
+
     # Test connection before saving
     success, error = test_storage_profile_connection(profile)
     if not success:
@@ -365,6 +373,11 @@ async def update_storage_profile(
             if profile_data.region is not None:
                 profile.region = profile_data.region
             if profile_data.is_default is not None:
+                if profile_data.is_default and profile.is_external:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="An external (read-only) storage profile cannot be the default",
+                    )
                 if profile_data.is_default:
                     StorageProfile.objects.filter(
                         organization=organization,
@@ -383,7 +396,8 @@ async def update_storage_profile(
                 profile.credential_ref = credential_ref
             
             profile.save()
-            
+            invalidate_profile_adapter(profile)
+
             logger.info(f"Updated storage profile {profile_id}")
             return StorageProfileResponse.from_orm(profile)
             
@@ -417,8 +431,14 @@ async def delete_storage_profile(
         try:
             profile = StorageProfile.objects.get(storage_profile_id=profile_id, organization=organization)
             profile.delete()
+            invalidate_profile_adapter(profile)
             logger.info(f"Deleted storage profile {profile_id}")
-            
+
+        except ProtectedError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Storage profile is still referenced by images or datasets; deactivate it instead",
+            )
         except StorageProfile.DoesNotExist:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -486,8 +506,13 @@ async def upload_file(
     def upload_file_sync(profile_id:UUID, organization:Organization):
         try:
             profile = StorageProfile.objects.get(storage_profile_id=profile_id, organization=organization)
+            if profile.is_external:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="External storage is read-only: files cannot be uploaded to it",
+                )
             adapter = get_storage_adapter_for_profile(profile)
-            
+
             # Upload file
             uploaded_key = adapter.upload_file(
                 file.file,
@@ -683,7 +708,9 @@ async def generate_presigned_url(
             )
             
             return presigned
-            
+
+        except StoragePermissionError as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
         except StorageError as e:
             logger.error(f"Presigned URL generation failed: {e}")
             raise HTTPException(
@@ -724,9 +751,14 @@ async def delete_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Storage profile {profile_id} not found"
             )
-        
+        if profile.is_external:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="External storage is read-only: files cannot be deleted from it",
+            )
+
         adapter = get_storage_adapter_for_profile(profile)
-        
+
         try:
             adapter.delete_file(key)
             

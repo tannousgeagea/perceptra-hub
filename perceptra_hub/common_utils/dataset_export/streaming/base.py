@@ -265,7 +265,8 @@ class BaseStreamingExporter:
         ).select_related('annotation_class')
         
         if not self.config.include_predictions:
-            queryset = queryset.filter(annotation_source='manual')
+            # ground truth: manual labels and externally verified imports
+            queryset = queryset.filter(annotation_source__in=('manual', 'imported'))
         
         return list(queryset)
     
@@ -306,12 +307,14 @@ class BaseStreamingExporter:
         Returns:
             File size in bytes
         """
-        # Get storage adapter
-        storage_profile = self.version.project.organization.storage_profiles.filter(
-            is_default=True,
-            is_active=True
-        ).first()
-        
+        # The version's own profile (what the training agent reads back), else
+        # the default — never an external (read-only) profile.
+        from storage.services import get_writable_storage_profile
+
+        storage_profile = get_writable_storage_profile(
+            self.version.project.organization, preferred=self.version.storage_profile,
+        )
+
         if not storage_profile:
             raise ValueError("No active default storage profile found")
         

@@ -50,6 +50,29 @@ class AccessKeyCredentials(BaseModel):
     type: Literal["access_key"] = "access_key"
     access_key_id: str = Field(..., description="Access key ID")
     secret_access_key: str = Field(..., description="Secret access key")
+    session_token: Optional[str] = Field(None, description="Temporary session token (STS)")
+
+
+class SasTokenCredentials(BaseModel):
+    """Azure Shared Access Signature. Cannot mint short-lived URLs: images
+    of such a profile are served through the signed media proxy."""
+    type: Literal["sas_token"] = "sas_token"
+    sas_token: str = Field(..., description="SAS query string, e.g. sv=...&sp=rl&sig=...")
+
+
+class ServicePrincipalCredentials(BaseModel):
+    """Azure Entra ID service principal (Storage Blob Data Reader +
+    Storage Blob Delegator): short-lived user-delegation SAS URLs."""
+    type: Literal["service_principal"] = "service_principal"
+    tenant_id: str
+    client_id: str
+    client_secret: str
+
+
+class GcsServiceAccountCredentials(BaseModel):
+    """Google Cloud service-account key (JSON)."""
+    type: Literal["gcs_service_account"] = "gcs_service_account"
+    service_account_info: Dict[str, Any] | str = Field(..., description="Service-account key JSON")
 
 
 class ExternalSecretCredentials(BaseModel):
@@ -61,12 +84,23 @@ class ExternalSecretCredentials(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
+StorageCredentials = (
+    ConnectionStringCredentials | AccountKeyCredentials | AccessKeyCredentials | SasTokenCredentials
+    | ServicePrincipalCredentials | GcsServiceAccountCredentials | ExternalSecretCredentials
+)
+
+
 class ProfileConfiguration(BaseModel):
     """Storage profile configuration."""
     name: str = Field(..., min_length=1, max_length=100)
-    backend: str = Field(..., description="Storage backend (azure, s3, minio, local)")
+    backend: str = Field(..., description="Storage backend (azure, s3, minio, gcs, local)")
     region: Optional[str] = None
     is_default: bool = False
+    access_mode: Literal["managed", "external_readonly"] = Field(
+        "managed",
+        description="external_readonly: storage owned by another system, images are "
+                    "registered by reference and never written or deleted",
+    )
     config: Dict[str, Any] = Field(
         ...,
         description="Backend config (container_name, bucket_name, etc.)"
@@ -79,6 +113,7 @@ class ProfileConfiguration(BaseModel):
                 "backend": "azure",
                 "region": "westeurope",
                 "is_default": True,
+                "access_mode": "managed",
                 "config": {
                     "container_name": "my-container",
                     "account_name": "mystorageaccount"
@@ -90,7 +125,7 @@ class ProfileConfiguration(BaseModel):
 class TestConnectionRequest(BaseModel):
     """Request to test storage connection without saving."""
     profile: ProfileConfiguration
-    credentials: ConnectionStringCredentials | AccountKeyCredentials | AccessKeyCredentials | ExternalSecretCredentials
+    credentials: StorageCredentials
     
     class Config:
         json_schema_extra = {
@@ -122,7 +157,7 @@ class TestConnectionResponse(BaseModel):
 class CreateProfileWithCredentialsRequest(BaseModel):
     """Request to create storage profile with credentials."""
     profile: ProfileConfiguration
-    credentials: ConnectionStringCredentials | AccountKeyCredentials | AccessKeyCredentials | ExternalSecretCredentials
+    credentials: StorageCredentials
     test_before_save: bool = Field(
         default=True,
         description="Test connection before saving"
@@ -156,13 +191,14 @@ class CreateProfileWithCredentialsResponse(BaseModel):
     credential_ref_id: Optional[str]
     encrypted_secret_identifier: Optional[str]
     is_default: bool
+    access_mode: str
     message: str
 
 
 # ============= Helper Functions =============
 
 def prepare_credentials_dict(
-    credentials: ConnectionStringCredentials | AccountKeyCredentials | AccessKeyCredentials | ExternalSecretCredentials,
+    credentials: StorageCredentials,
     profile_config: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
@@ -192,12 +228,38 @@ def prepare_credentials_dict(
         }
     
     elif credentials.type == "access_key":
-        # For S3/MinIO
-        return {
+        # For S3/MinIO (the MinIO adapter accepts the S3 key names too)
+        creds = {
             "access_key_id": credentials.access_key_id,
             "secret_access_key": credentials.secret_access_key
         }
-    
+        if credentials.session_token:
+            creds["session_token"] = credentials.session_token
+        return creds
+
+    elif credentials.type == "sas_token":
+        return {"sas_token": credentials.sas_token.strip().lstrip("?")}
+
+    elif credentials.type == "service_principal":
+        return {
+            "tenant_id": credentials.tenant_id,
+            "client_id": credentials.client_id,
+            "client_secret": credentials.client_secret,
+        }
+
+    elif credentials.type == "gcs_service_account":
+        info = credentials.service_account_info
+        if isinstance(info, str):
+            import json
+            try:
+                info = json.loads(info)
+            except json.JSONDecodeError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="service_account_info must be the service-account key JSON",
+                )
+        return {"service_account_info": info}
+
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -315,7 +377,14 @@ async def create_profile_with_credentials(
     """
     # Require admin role
     ctx.require_role('admin', 'owner')
-    
+
+    # Checked before any secret is created (the model would reject it later as a 500).
+    if request.profile.access_mode == "external_readonly" and request.profile.is_default:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An external (read-only) storage profile cannot be the default",
+        )
+
     @sync_to_async
     def create_complete_storage_profile(
         organization: Organization,
@@ -375,6 +444,7 @@ async def create_profile_with_credentials(
                 backend=profile_data.backend,
                 region=profile_data.region,
                 is_default=profile_data.is_default,
+                access_mode=profile_data.access_mode,
                 config=profile_data.config,
                 credential_ref=secret_ref,
                 is_active=True
@@ -453,6 +523,7 @@ async def create_profile_with_credentials(
             credential_ref_id=str(result["secret_ref"].credential_ref_id),
             encrypted_secret_identifier=result["encrypted_secret_id"],
             is_default=result["profile"].is_default,
+            access_mode=result["profile"].access_mode,
             message="Storage profile created successfully"
         )
         

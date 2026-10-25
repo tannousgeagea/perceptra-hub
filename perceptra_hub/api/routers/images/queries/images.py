@@ -20,7 +20,7 @@ from django.db import models
 from pydantic import BaseModel, Field
 from api.dependencies import RequestContext, get_request_context
 from storage.models import StorageProfile
-from storage.services import get_storage_adapter_for_profile, get_default_storage_adapter
+from storage.services import get_storage_adapter_for_profile, get_default_storage_profile
 from images.models import Image, Tag, ImageTag
 from organizations.models import Organization
 from django.contrib.auth import get_user_model
@@ -132,7 +132,7 @@ def process_image_upload(
     if storage_profile_id:
         try:
             storage_profile = StorageProfile.objects.get(
-                id=storage_profile_id,
+                storage_profile_id=storage_profile_id,
                 organization=ctx.organization,
                 is_active=True
             )
@@ -141,14 +141,15 @@ def process_image_upload(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Storage profile {storage_profile_id} not found"
             )
+        if storage_profile.is_external:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="External storage is read-only: register its images with POST /api/v1/ingest/images",
+            )
     else:
-        # Use default storage profile
-        storage_profile = StorageProfile.objects.filter(
-            organization=ctx.organization,
-            is_default=True,
-            is_active=True
-        ).first()
-        
+        # Use default storage profile (never an external one)
+        storage_profile = get_default_storage_profile(ctx.organization)
+
         if not storage_profile:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

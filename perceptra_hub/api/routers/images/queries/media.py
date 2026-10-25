@@ -28,15 +28,60 @@ def _media_url(storage_backend: str, storage_key: str) -> str:
     return ""  # caller will call get_download_url for cloud backends
 
 
+@router.get("/images/{image_id}", include_in_schema=True)
+async def serve_image_via_proxy(image_id: str, exp: str = None, sig: str = None):
+    """Stream an image whose storage cannot mint short-lived URLs (e.g. an
+    external Azure profile with a SAS-only credential), authorized by the
+    signed query string from Image.get_proxy_url — the storage token never
+    reaches the browser."""
+    from asgiref.sync import sync_to_async
+    from storage.signing import verify
+
+    if not verify(f"/api/v1/media/images/{image_id}", exp, sig):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid or expired link")
+
+    @sync_to_async
+    def load():
+        from images.models import Image
+        from perceptra_storage import StorageNotFoundError
+        from storage.services import get_storage_adapter_for_profile
+
+        image = Image.objects.select_related("storage_profile").filter(image_id=image_id).first()
+        if image is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Image not found")
+        try:
+            data = get_storage_adapter_for_profile(image.storage_profile).download_file(image.storage_key)
+        except StorageNotFoundError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="File not found in storage")
+        content_type = mimetypes.guess_type(image.storage_key)[0] or f"image/{image.file_format or 'jpeg'}"
+        return data, content_type
+
+    data, content_type = await load()
+    return StreamingResponse(
+        iter([data]),
+        media_type=content_type,
+        headers={"Content-Length": str(len(data)), "Cache-Control": "private, max-age=600"},
+    )
+
+
 @router.get("/files/{storage_path:path}", include_in_schema=True)
-async def serve_local_file(request: Request, storage_path):
+async def serve_local_file(request: Request, storage_path, exp: str = None, sig: str = None):
     """Stream a file from local storage with HTTP range request support.
 
     Range support is required for HTML5 video seeking (browsers send
     'Range: bytes=N-M' when the user scrubs the timeline).
+
+    With MEDIA_REQUIRE_SIGNED_URLS the request must carry the signature that
+    storage.services.get_local_media_url adds (it always adds one).
     """
-    
+
     from django.conf import settings
+
+    if getattr(settings, "MEDIA_REQUIRE_SIGNED_URLS", False):
+        from storage.signing import verify
+
+        if not verify(f"/api/v1/media/files/{storage_path.lstrip('/')}", exp, sig):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invalid or expired link")
 
     # Stored keys are absolute filesystem paths, but the leading slash may be
     # lost in transit (nginx merges "//" into "/"), so root the path ourselves.

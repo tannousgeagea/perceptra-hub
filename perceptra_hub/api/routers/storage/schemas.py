@@ -13,7 +13,14 @@ class StorageBackendEnum(str, Enum):
     AZURE = "azure"
     S3 = "s3"
     MINIO = "minio"
+    GCS = "gcs"
     LOCAL = "local"
+
+
+class StorageAccessModeEnum(str, Enum):
+    """managed: Perceptra owns the files; external_readonly: referenced only."""
+    MANAGED = "managed"
+    EXTERNAL_READONLY = "external_readonly"
 
 
 class SecretProviderEnum(str, Enum):
@@ -75,6 +82,7 @@ class StorageProfileCreate(BaseModel):
     backend: StorageBackendEnum
     region: Optional[str] = Field(None, max_length=50)
     is_default: bool = False
+    access_mode: StorageAccessModeEnum = StorageAccessModeEnum.MANAGED
     config: Dict[str, Any] = Field(...)
     credential_ref_id: Optional[str] = None
 
@@ -99,10 +107,14 @@ class StorageProfileCreate(BaseModel):
                     "MinIO backend requires 'bucket_name' and 'endpoint_url' in config"
                 )
         
+        elif backend == StorageBackendEnum.GCS:
+            if 'bucket_name' not in v:
+                raise ValueError("GCS backend requires 'bucket_name' in config")
+
         elif backend == StorageBackendEnum.LOCAL:
             if 'base_path' not in v:
                 raise ValueError("Local backend requires 'base_path' in config")
-        
+
         return v
 
     class Config:
@@ -140,6 +152,7 @@ class StorageProfileResponse(BaseModel):
     region: Optional[str]
     is_default: bool
     is_active: bool
+    access_mode: str = "managed"
     config: Dict[str, Any]
     credential_ref_id: Optional[int]
     created_at: datetime

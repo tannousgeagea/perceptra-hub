@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     'temporal_analysis',
     'api_keys',
     'similarity',
+    'ingest',
 ]
 
 MIDDLEWARE = [
@@ -214,6 +215,14 @@ MEDIA_BASE_URL = env('MEDIA_BASE_URL', '').rstrip('/')
 MEDIA_SERVE_ROOTS = [
     p.strip() for p in env('MEDIA_SERVE_ROOTS', '/media').split(',') if p.strip()
 ]
+
+# HMAC key of the signed media URLs (storage/signing.py): the image proxy for
+# storage that cannot mint short-lived URLs, and local files. Rotating it
+# invalidates every outstanding link. Defaults to SECRET_KEY.
+MEDIA_URL_SIGNING_KEY = env('MEDIA_URL_SIGNING_KEY', '') or SECRET_KEY
+# Require that signature on /api/v1/media/files/ (local storage). Off by
+# default so URLs stored before signing existed keep working.
+MEDIA_REQUIRE_SIGNED_URLS = env('MEDIA_REQUIRE_SIGNED_URLS', 'false').lower() in ('1', 'true', 'yes')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field

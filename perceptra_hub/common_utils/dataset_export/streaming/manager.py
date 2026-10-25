@@ -85,9 +85,11 @@ class StreamingDatasetExportManager:
                 
                 # Get file size from storage
                 try:
-                    storage_profile = version.project.organization.storage_profiles.filter(
-                        is_default=True
-                    ).first()
+                    from storage.services import get_writable_storage_profile
+
+                    storage_profile = get_writable_storage_profile(
+                        version.project.organization, preferred=version.storage_profile,
+                    )
                     adapter = get_storage_adapter_for_profile(storage_profile)
                     metadata = adapter.get_file_metadata(storage_key)
                     version.file_size = metadata.size
