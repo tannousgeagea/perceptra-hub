@@ -135,6 +135,67 @@ class CreateProfileWithCredentialsApiTest(TransactionTestCase):
         self.assertEqual(self.post(access_mode="readonly").status_code, 422)
 
 
+class BrowseApiTest(TransactionTestCase):
+    """GET /api/v1/storage/profiles/{id}/browse — the console's file picker."""
+
+    def setUp(self):
+        import os
+        from types import SimpleNamespace
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from api.dependencies import get_request_context
+        from api.routers.storage.queries import storage_browse
+
+        self.base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.base, True)
+        for key in ("cam1/a.jpg", "cam1/b.jpg", "cam1/notes.txt", "cam2/c.png", "root.jpg"):
+            os.makedirs(os.path.join(self.base, os.path.dirname(key)), exist_ok=True)
+            with open(os.path.join(self.base, key), "wb") as fh:
+                fh.write(b"x")
+        self.org = _org("browse-org")
+        self.profile = StorageProfile.objects.create(
+            organization=self.org, name="ext", backend="local", access_mode="external_readonly",
+            config={"base_path": self.base},
+        )
+        Image.objects.create(
+            image_id="already", organization=self.org, storage_profile=self.profile, storage_key="cam1/a.jpg",
+            name="a", original_filename="a.jpg", file_format="jpg", file_size=1, width=1, height=1, image_name="a",
+        )
+        app = FastAPI()
+        app.include_router(storage_browse.router, prefix="/api/v1")
+        ctx = SimpleNamespace(organization=self.org, api_key=None, has_role=lambda *roles: True)
+        app.dependency_overrides[get_request_context] = lambda: ctx
+        self.client = TestClient(app)
+        self.url = f"/api/v1/storage/profiles/{self.profile.storage_profile_id}/browse"
+
+    def test_root_lists_folders_and_images(self):
+        body = self.client.get(self.url).json()
+        self.assertEqual(body["folders"], ["cam1/", "cam2/"])
+        self.assertEqual([f["key"] for f in body["files"]], ["root.jpg"])
+
+    def test_folder_flags_registered_files_and_hides_non_images(self):
+        body = self.client.get(self.url, params={"prefix": "cam1/"}).json()
+        files = {f["key"]: f for f in body["files"]}
+        self.assertEqual(sorted(files), ["cam1/a.jpg", "cam1/b.jpg"])
+        self.assertTrue(files["cam1/a.jpg"]["registered"])
+        self.assertEqual(files["cam1/a.jpg"]["image_id"], "already")
+        self.assertFalse(files["cam1/b.jpg"]["registered"])
+
+    def test_paging(self):
+        first = self.client.get(self.url, params={"prefix": "cam1/", "page_size": 1, "images_only": False}).json()
+        self.assertIsNotNone(first["next_token"])
+
+    def test_credential_without_list_gets_a_helpful_403(self):
+        from perceptra_storage import StoragePermissionError
+
+        with patch("perceptra_storage.ReadOnlyStorageAdapter.list_page", side_effect=StoragePermissionError("no list")):
+            response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Paste the file keys", response.json()["detail"])
+
+
 class SigningTest(TestCase):
     @override_settings(MEDIA_URL_SIGNING_KEY="k1")
     def test_sign_and_verify(self):
