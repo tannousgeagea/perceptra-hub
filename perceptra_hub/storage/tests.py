@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import time
 from io import BytesIO
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -216,3 +216,89 @@ class SigningTest(TestCase):
             url = image.get_download_url(expiration=120)
         self.assertTrue(url.startswith("/api/v1/media/images/img-9?exp="), url)
         self.assertIn("&sig=", url)
+
+    def test_signed_url_is_stable_within_a_window_and_lasts_at_least_its_ttl(self):
+        with patch("storage.signing.time.time", return_value=3600 * 10 + 5):
+            first = signing.signed_query("/p", 3600)
+        with patch("storage.signing.time.time", return_value=3600 * 11 - 1):
+            same = signing.signed_query("/p", 3600)
+        with patch("storage.signing.time.time", return_value=3600 * 11):
+            later = signing.signed_query("/p", 3600)
+        self.assertEqual(first, same)
+        self.assertNotEqual(first, later)
+        self.assertIn("exp=43200", first)  # minted at 10h00:05, valid until 12h00
+
+    @override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
+    def test_presigned_url_is_reused_within_a_window(self):
+        from storage.services import cached_presigned_url
+
+        profile = StorageProfile.objects.create(organization=_org("org3"), name="s3", backend="s3",
+                                                config={"bucket_name": "b"})
+        adapter = MagicMock()
+        adapter.generate_presigned_url.side_effect = lambda key, expiration, method: MagicMock(
+            url=f"https://s3/{key}?sig={adapter.generate_presigned_url.call_count}")
+        with patch("storage.services.time.time", return_value=3600 * 10 + 5):
+            first = cached_presigned_url(profile, adapter, "a.jpg", 3600)
+            self.assertEqual(cached_presigned_url(profile, adapter, "a.jpg", 3600), first)
+            other = cached_presigned_url(profile, adapter, "b.jpg", 3600)
+        with patch("storage.services.time.time", return_value=3600 * 11 + 5):
+            next_window = cached_presigned_url(profile, adapter, "a.jpg", 3600)
+        self.assertNotEqual(first, other)
+        self.assertNotEqual(first, next_window)
+        self.assertEqual(adapter.generate_presigned_url.call_count, 3)
+        adapter.generate_presigned_url.assert_called_with("a.jpg", expiration=7200, method="GET")
+
+
+class MediaProxyTest(TransactionTestCase):
+    def setUp(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from api.routers.images.queries import media
+
+        org = _org("org-proxy")
+        profile = StorageProfile.objects.create(organization=org, name="ext", backend="azure",
+                                                access_mode="external_readonly",
+                                                config={"account_name": "a", "container_name": "c"})
+        self.data = bytes(range(256)) * 40  # 10 KB
+        self.image = Image.objects.create(
+            image_id="img-p", organization=org, storage_profile=profile, storage_key="a/b.jpg", name="b",
+            original_filename="b.jpg", file_format="jpg", file_size=len(self.data), width=1, height=1,
+            image_name="b", checksum="abc",
+        )
+        self.adapter = MagicMock()
+        self.adapter.download_file.return_value = self.data
+        self.adapter.download_range.side_effect = lambda key, offset, length: self.data[offset:offset + length]
+        patcher = patch("storage.services.get_storage_adapter_for_profile", return_value=self.adapter)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        app = FastAPI()
+        app.include_router(media.router, prefix="/api/v1")
+        self.client = TestClient(app)
+        self.media = media
+
+    def url(self):
+        return self.image.get_proxy_url(3600)
+
+    def test_serves_the_file_with_cache_headers_and_answers_304_on_revalidation(self):
+        response = self.client.get(self.url())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, self.data)
+        self.assertEqual(response.headers["etag"], '"img-p-abc"')
+        max_age = int(response.headers["cache-control"].split("max-age=")[1])
+        self.assertGreaterEqual(max_age, 3600 - 5)
+
+        self.adapter.download_file.reset_mock()
+        again = self.client.get(self.url(), headers={"If-None-Match": '"img-p-abc"'})
+        self.assertEqual(again.status_code, 304)
+        self.adapter.download_file.assert_not_called()
+
+    def test_large_files_are_streamed_in_ranged_reads(self):
+        with patch.object(self.media, "PROXY_CHUNK_BYTES", 4096):
+            response = self.client.get(self.url())
+        self.assertEqual(response.content, self.data)
+        self.adapter.download_file.assert_not_called()
+        self.assertEqual(self.adapter.download_range.call_count, 3)  # 4096 + 4096 + 2048
+
+    def test_bad_signature_is_rejected(self):
+        self.assertEqual(self.client.get("/api/v1/media/images/img-p?exp=9999999999&sig=x").status_code, 403)

@@ -33,8 +33,15 @@ def sign(path: str, expires_at: int) -> str:
 
 
 def signed_query(path: str, expiration: int = DEFAULT_EXPIRATION_S) -> str:
-    """'exp=…&sig=…' authorizing GET `path` for `expiration` seconds."""
-    expires_at = int(time.time()) + int(expiration)
+    """
+    'exp=…&sig=…' authorizing GET `path` for at least `expiration` seconds.
+
+    The expiry is rounded up to the end of the next window of `expiration`
+    seconds (so it lasts up to twice as long): every request in the same
+    window gets the same URL, and browsers can serve the file from cache.
+    """
+    window = max(60, int(expiration))
+    expires_at = (int(time.time()) // window + 2) * window
     return urlencode({"exp": expires_at, "sig": sign(path, expires_at)})
 
 

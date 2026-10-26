@@ -618,6 +618,42 @@ def get_local_media_url(storage_key: str) -> str:
     return f"{base}{path}?{signed_query(path, LOCAL_MEDIA_URL_TTL_S)}"
 
 
+def cached_presigned_url(
+    profile: StorageProfile, adapter: BaseStorageAdapter, storage_key: str, expiration: int = 3600
+) -> str:
+    """
+    Presigned GET URL of `storage_key` that stays the same for every request
+    in the same time window, so browsers reuse their cached copy of the file
+    instead of downloading it again on every page load (a fresh signature
+    is a new URL, which the browser cache cannot match).
+
+    One URL is minted per (profile version, key, window) and shared through
+    the Django cache. It is signed for 2 windows, so whoever gets it has at
+    least `expiration` seconds left. Without a cache it is just minted.
+    """
+    import hashlib
+
+    from django.core.cache import cache
+
+    window = max(60, int(expiration))
+    now = int(time.time())
+    bucket = now // window
+    key_hash = hashlib.sha1(storage_key.encode()).hexdigest()
+    cache_key = f"presigned:{profile.pk}:{_adapter_cache_key(profile)[1]}:{key_hash}:{window}:{bucket}"
+    try:
+        url = cache.get(cache_key)
+    except Exception:
+        url = None
+    if url:
+        return url
+    url = adapter.generate_presigned_url(storage_key, expiration=2 * window, method='GET').url
+    try:
+        cache.set(cache_key, url, timeout=(bucket + 1) * window - now)
+    except Exception:
+        logger.debug("Presigned URL cache unavailable", exc_info=True)
+    return url
+
+
 ADAPTER_CACHE_TTL_S = int(os.getenv('STORAGE_ADAPTER_CACHE_TTL_S', '300'))
 # Local media URLs are stored in places (project thumbnails): keep them valid long.
 LOCAL_MEDIA_URL_TTL_S = int(os.getenv('LOCAL_MEDIA_URL_TTL_S', str(7 * 24 * 3600)))
