@@ -156,7 +156,7 @@ class Image(models.Model):
         Returns:
             URL string
         """
-        from storage.services import get_storage_adapter_for_profile
+        from storage.services import cached_presigned_url, get_storage_adapter_for_profile
 
         if self.storage_profile.backend == "local":
             from api.routers.images.queries.media import _media_url
@@ -168,12 +168,7 @@ class Image(models.Model):
         adapter = get_storage_adapter_for_profile(self.storage_profile)
         if not adapter.can_presign:
             return self.get_proxy_url(expiration)
-        presigned = adapter.generate_presigned_url(
-            self.storage_key,
-            expiration=expiration,
-            method='GET'
-        )
-        return presigned.url
+        return cached_presigned_url(self.storage_profile, adapter, self.storage_key, expiration)
 
     def get_proxy_url(self, expiration: int = 3600) -> str:
         """Signed URL of the media proxy streaming this image (no auth header needed)."""
