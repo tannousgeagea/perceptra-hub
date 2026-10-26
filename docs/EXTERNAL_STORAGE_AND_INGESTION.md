@@ -75,7 +75,7 @@ POST /api/v1/ingest/images            (API key: scope ingest:write, write permis
     "external_id": "sample-uuid",            // idempotency key
     "storage_profile_name": "data-hub-dropzone",   // or storage_profile_id
     "storage_key": "images/t1/2026/10/sample-uuid.jpg",
-    "width": 1920, "height": 1080,           // required: images are never downloaded
+    "width": 1920, "height": 1080,           // optional: omitted → read from the image header (see below)
     "checksum": "sha256…", "file_size": 123456, "captured_at": "…",
     "metadata": {...}, "tags": ["tenant:t1", "delivery:D-7"],
     "mark_as_null": false, "review_priority": 7,
@@ -114,6 +114,34 @@ annotations. Storage is never touched.
 
 SDK: `client.ingest.register_images(items, project_id=…)`, which batches automatically, and
 `client.ingest.remove_images(ids, project_id=…)`.
+
+### Image size: given, or read from the header
+
+- **Producers that know the size** (data_hub) send `width`/`height`, so the image is never read at all.
+- **When the size is omitted**, the hub reads only the image header with a ranged request
+  (`ingest/probe.py`; perceptra-storage `download_range`).
+  - It reads 64 KB first, then 1 MB for JPEGs with a large EXIF block.
+  - Probes run 8 in parallel, before the per-item transactions.
+  - Nothing is stored, and `sp=r` is enough.
+  - An image already registered is never probed again.
+  - A file that isn't a readable image is reported per item.
+
+## Registering through the console
+
+**Data lake → Register from Storage** (`/register`), or **project → Register from Storage**
+(`/projects/{id}/register`). This is the by-reference counterpart of Upload.
+
+1. **Pick a storage profile.** External profiles are listed first.
+2. **Pick files** in one of three ways:
+
+   | Tab | How it works | Needs list permission |
+   |---|---|---|
+   | **Browse** | `GET /api/v1/storage/profiles/{id}/browse?prefix=&token=`: folders and files, one native page at a time (perceptra-storage `list_page`). Files already registered are flagged. | Yes. A credential without it gets a 403 that points to the other tabs. |
+   | **Paste keys** | One key per line, with an optional folder prefix. | No |
+   | **Manifest** | CSV with `key[,width,height,external_id,name,tags]` (tags separated by `;`), or JSON ingest items, which may include annotations. | No |
+3. **Register.** Add tags and optionally assign the images to annotation jobs. Batches of 500 go to
+   `POST /api/v1/ingest/images`. The result shows created, updated, already registered and failed, with each
+   failure's reason.
 
 ## Implementation map
 

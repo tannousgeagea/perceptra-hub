@@ -7,6 +7,11 @@ an external read-only StorageProfile — together with their metadata, tags and
 annotations. Nothing is downloaded or copied: an image is its
 (storage_profile, storage_key), URLs are built from the profile on demand.
 
+Image size
+    Producers that know it send width/height (no read at all). Otherwise the
+    hub reads only the image header with a ranged request (ingest/probe.py) —
+    never the whole file, nothing stored; a registered image is never probed again.
+
 Idempotency
     image       by (organization, external_id), else by (storage_profile, storage_key)
     annotation  by (project_image, external_id)
@@ -204,27 +209,66 @@ IMAGE_FIELDS = ("storage_profile_id", "storage_key", "width", "height", "file_si
                 "checksum", "meta_info", "source_of_origin")
 
 
-def _upsert_image(organization, user, item: dict, profile, source_label: str):
-    from images.models import Image
+def _item_key(item: dict) -> str:
+    return (item.get("storage_key") or "").strip().lstrip("/")
 
-    key = (item.get("storage_key") or "").strip().lstrip("/")
-    if not key:
-        raise IngestError("storage_key is required")
+
+def _given_size(item: dict) -> Optional[tuple]:
+    """(width, height) from the payload, None when not given."""
+    if item.get("width") in (None, "", 0) and item.get("height") in (None, "", 0):
+        return None
     try:
         width, height = int(item.get("width") or 0), int(item.get("height") or 0)
     except (TypeError, ValueError):
         raise IngestError("width and height must be integers")
     if width <= 0 or height <= 0:
-        raise IngestError("width and height (pixels) are required: images are never downloaded")
+        raise IngestError("width and height must both be positive (or both omitted to probe the image header)")
+    return width, height
+
+
+def _find_image(organization, item: dict, profile):
+    from images.models import Image
 
     external_id = item.get("external_id")
     image = None
     if external_id:
         image = Image.objects.filter(organization=organization, external_id=external_id).first()
     if image is None:
-        image = Image.objects.filter(storage_profile=profile, storage_key=key).first()
+        image = Image.objects.filter(storage_profile=profile, storage_key=_item_key(item)).first()
         if image is not None and image.external_id and external_id and image.external_id != external_id:
             raise IngestError(f"storage key already registered under external_id '{image.external_id}'")
+    return image
+
+
+def _upsert_image(organization, user, item: dict, profile, source_label: str, probed=None):
+    """probed: the ProbeResult / ProbeError of this item's header probe, when
+    its size had to be learned from the image itself."""
+    from images.models import Image
+
+    from ingest.probe import ProbeError
+
+    key = _item_key(item)
+    if not key:
+        raise IngestError("storage_key is required")
+    external_id = item.get("external_id")
+    image = _find_image(organization, item, profile)
+    same_file = image is not None and image.storage_profile_id == profile.id and image.storage_key == key
+
+    size = _given_size(item)
+    probed_size = None
+    if size is None and same_file and image.width and image.height:
+        size = (image.width, image.height)  # already known: no read
+    if size is None:
+        if isinstance(probed, ProbeError):
+            raise IngestError(str(probed))
+        if probed is None:
+            raise IngestError("width and height are required (the image header could not be probed)")
+        size, probed_size = (probed.width, probed.height), probed.file_size
+    width, height = size
+
+    file_size = item.get("file_size")
+    if file_size in (None, ""):
+        file_size = probed_size if probed_size is not None else (image.file_size if same_file else 0)
 
     filename = os.path.basename(key)
     extension = os.path.splitext(filename)[1].lstrip(".").lower()[:10] or "jpg"
@@ -239,7 +283,7 @@ def _upsert_image(organization, user, item: dict, profile, source_label: str):
         "storage_key": key,
         "width": width,
         "height": height,
-        "file_size": int(item.get("file_size") or 0),
+        "file_size": int(file_size or 0),
         "file_format": extension,
         "checksum": item.get("checksum") or None,
         "meta_info": meta,
@@ -438,6 +482,36 @@ def _refresh_project_image_flags(pi) -> None:
     ProjectImage.objects.filter(pk=pi.pk).update(**updates, updated_at=timezone.now())
 
 
+# ── Header probes ─────────────────────────────────────────────────────────
+
+def _probe_unsized(organization, items: List[dict], cache: _BatchCache) -> Dict[int, Any]:
+    """Sizes of the items that do not carry one and are not registered yet,
+    read from their image headers in parallel (ingest/probe.py) before the
+    per-item transactions. {index: ProbeResult | ProbeError}"""
+    from ingest.probe import probe_many
+    from storage.services import get_storage_adapter_for_profile
+
+    jobs, index_of = [], {}
+    for index, item in enumerate(items):
+        try:
+            if _given_size(item) is not None or not _item_key(item):
+                continue
+            profile = _resolve_profile(organization, item, cache)
+            image = _find_image(organization, item, profile)
+            if (image is not None and image.storage_profile_id == profile.id
+                    and image.storage_key == _item_key(item) and image.width and image.height):
+                continue  # already sized
+            adapter = get_storage_adapter_for_profile(profile)
+        except Exception:
+            continue  # the item reports its own error in the main loop
+        jobs.append((adapter, _item_key(item)))
+        index_of.setdefault((id(adapter), _item_key(item)), []).append(index)
+    if not jobs:
+        return {}
+    outcomes = probe_many(dict.fromkeys(jobs))  # each (storage, key) probed once
+    return {i: outcome for job_key, outcome in outcomes.items() for i in index_of.get(job_key, [])}
+
+
 # ── Entry points ──────────────────────────────────────────────────────────
 
 def register_items(organization, user, items: List[dict], project=None,
@@ -446,6 +520,7 @@ def register_items(organization, user, items: List[dict], project=None,
     reported and the rest of the batch still lands."""
     options = options or IngestOptions()
     cache = _BatchCache()
+    probes = _probe_unsized(organization, items, cache)
     results = []
     for index, item in enumerate(items):
         result = {"index": index, "external_id": item.get("external_id"), "status": STATUS_ERROR}
@@ -455,10 +530,13 @@ def register_items(organization, user, items: List[dict], project=None,
                 if options.verify_exists:
                     from storage.services import get_storage_adapter_for_profile
 
-                    key = (item.get("storage_key") or "").strip().lstrip("/")
+                    key = _item_key(item)
                     if not get_storage_adapter_for_profile(profile).file_exists(key):
                         raise IngestError(f"'{key}' does not exist in storage profile '{profile.name}'")
-                image, status = _upsert_image(organization, user, item, profile, source_label)
+                image, status = _upsert_image(organization, user, item, profile, source_label,
+                                              probed=probes.get(index))
+                if index in probes and not isinstance(probes[index], Exception):
+                    result["probed"] = True
                 if _sync_tags(organization, user, image, item.get("tags") or [], cache) and status == STATUS_UNCHANGED:
                     status = STATUS_UPDATED
                 result.update(image_id=image.image_id, storage_profile_id=str(profile.storage_profile_id))

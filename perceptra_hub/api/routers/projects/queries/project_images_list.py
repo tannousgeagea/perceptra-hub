@@ -18,7 +18,8 @@ from projects.models import (
 from common_utils.image.utils import parse_project_image_query, apply_project_image_filters
 from api.routers.projects.schemas import ProjectImagesResponse
 from images.models import Image
-from django.db.models import Count, Q
+from jobs.models import JobImage
+from django.db.models import Count, Prefetch, Q
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -117,7 +118,12 @@ async def list_project_images(
             ).prefetch_related(
                 'image__tags',
                 'annotations__annotation_class',
-                'annotations__annotation_type'
+                'annotations__annotation_type',
+                # Jobs an image is in (the dataset's "open in annotator" action)
+                Prefetch(
+                    'job_assignments',
+                    queryset=JobImage.objects.filter(is_active=True).select_related('job'),
+                ),
             ).distinct()[skip:skip + limit]
         )
         

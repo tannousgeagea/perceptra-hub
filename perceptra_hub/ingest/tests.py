@@ -5,6 +5,7 @@ Register-by-reference ingestion (ingest/services.py).
 """
 import shutil
 import tempfile
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -161,3 +162,75 @@ class RemoveTest(IngestFixture):
         # Re-registering brings the link back.
         self.register(self.item())
         self.assertTrue(ProjectImage.objects.get(image__external_id="sample-1").is_active)
+
+
+class HeaderProbeTest(IngestFixture):
+    """Registering without width/height reads only the image header."""
+
+    def write_image(self, key, size=(640, 480), fmt="JPEG"):
+        import os
+
+        from PIL import Image as PILImage
+
+        path = os.path.join(self.base, key)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        PILImage.new("RGB", size, (10, 20, 30)).save(path, format=fmt)
+        return os.path.getsize(path)
+
+    def unsized(self, key, **extra):
+        return {"storage_profile_name": "external", "storage_key": key, "tags": ["console"], **extra}
+
+    def test_size_is_probed_from_the_header(self):
+        nbytes = self.write_image("cam1/a.jpg", (800, 600))
+        self.write_image("cam1/b.png", (320, 200), "PNG")
+        results = self.register(self.unsized("cam1/a.jpg"), self.unsized("cam1/b.png"))
+        self.assertEqual([r["status"] for r in results], ["created", "created"], results)
+        self.assertTrue(all(r.get("probed") for r in results))
+        a = Image.objects.get(storage_key="cam1/a.jpg")
+        self.assertEqual((a.width, a.height, a.file_size), (800, 600, nbytes))
+        self.assertEqual((Image.objects.get(storage_key="cam1/b.png").width,), (320,))
+
+    def test_registered_image_is_not_probed_again(self):
+        self.write_image("cam1/a.jpg")
+        self.register(self.unsized("cam1/a.jpg"))
+        with patch("ingest.probe.probe_image") as probe:
+            [result] = self.register(self.unsized("cam1/a.jpg"))
+        probe.assert_not_called()
+        self.assertEqual(result["status"], "unchanged")
+
+    def test_large_exif_header_needs_the_second_read(self):
+        from ingest.probe import READ_STEPS, probe_image
+        from storage.services import get_storage_adapter_for_profile
+
+        import os
+
+        from PIL import Image as PILImage
+
+        # Noise compresses badly: a file well over the first read.
+        PILImage.frombytes("RGB", (1024, 768), os.urandom(1024 * 768 * 3)).save(
+            os.path.join(self.base, "big.jpg"), format="JPEG", quality=95)
+        adapter = get_storage_adapter_for_profile(self.profile)
+        original = adapter.download_range
+        calls = []
+
+        def ranged(key, offset=0, length=65536):
+            calls.append(length)
+            if length == READ_STEPS[0]:  # a full-length first chunk the parser cannot size (huge EXIF)
+                return b"\xff\xd8\xff\xe1" + b"\x00" * (length - 4)
+            return original(key, offset, length)
+
+        with patch.object(adapter, "download_range", side_effect=ranged):
+            result = probe_image(adapter, "big.jpg")
+        self.assertEqual((result.width, result.height), (1024, 768))
+        self.assertEqual(calls, list(READ_STEPS))
+
+    def test_unreadable_files_are_reported_per_item(self):
+        import os
+
+        with open(os.path.join(self.base, "notes.txt"), "w") as fh:
+            fh.write("not an image")
+        self.write_image("ok.jpg")
+        results = self.register(self.unsized("notes.txt"), self.unsized("missing.jpg"), self.unsized("ok.jpg"))
+        self.assertEqual([r["status"] for r in results], ["error", "error", "created"])
+        self.assertIn("not a readable image", results[0]["error"])
+        self.assertIn("cannot read", results[1]["error"])

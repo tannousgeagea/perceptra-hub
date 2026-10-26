@@ -81,7 +81,7 @@ RUN pip3 install psycopg2-binary
 RUN pip3 install python-jose
 RUN pip3 install zipstream
 RUN pip3 install albumentations
-RUN pip3 install perceptra-storage[all]==0.2.1  # adds GCS, Azure service principal (azure-identity), read-only external profiles
+RUN pip3 install perceptra-storage[all]==0.3.0  # external read-only profiles, GCS, Azure service principal; 0.3: ranged reads + paged folder listing
 RUN pip3 install pyjwt
 RUN pip3 install httpx>=0.24.0  # For async HTTP requests
 RUN pip3 install authlib>=1.2.0  # OAuth library (optional but recommended)
