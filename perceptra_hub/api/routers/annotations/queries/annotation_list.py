@@ -112,7 +112,7 @@ async def list_annotations(
                     "reviewed": ann.reviewed,
                     "is_active": ann.is_active,
                     "created_at": ann.created_at.isoformat(),
-                    "created_by": ann.created_by.username if ann.created_at else None
+                    "created_by": ann.created_by.username if ann.created_by else None
                 }
                 for ann in annotations
             ]

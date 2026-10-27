@@ -141,7 +141,7 @@ async def get_project_image(
                     "reviewed": ann.reviewed,
                     "is_active": ann.is_active,
                     "created_at": ann.created_at.isoformat(),
-                    "created_by": ann.created_by.username if ann.created_at else None
+                    "created_by": ann.created_by.username if ann.created_by else None
                 }
                 for ann in pi.annotations.filter(is_active=True).select_related(
                     'annotation_class', 'annotation_type'

@@ -11,6 +11,11 @@ from django.utils.translation import gettext_lazy as _
 from django.contrib.auth import get_user_model
 User = get_user_model()
 
+
+def new_annotation_uid() -> str:
+    return str(uuid.uuid4())
+
+
 class AnnotationGroup(models.Model):
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name='annotation_groups'
@@ -83,8 +88,10 @@ class Annotation(models.Model):
     )
     data = models.JSONField()
     # area = models.FloatField(editable=False, null=True)
-    annotation_uid = models.CharField(max_length=100, unique=True, null=True)
-    
+    # The platform's own id, set for every annotation however it is created
+    # (bulk_create included); a producer's own id goes in external_id.
+    annotation_uid = models.CharField(max_length=100, unique=True, default=new_annotation_uid)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True,related_name='annotations_created')
