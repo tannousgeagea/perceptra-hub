@@ -146,6 +146,55 @@ class RegisterTest(IngestFixture):
         self.assertTrue(pi.marked_as_null)
 
 
+class AnnotationUidTest(IngestFixture):
+    """Every annotation carries the platform's own id next to the producer's external_id."""
+
+    def test_ingested_annotations_get_a_stable_platform_id(self):
+        [result] = self.register(self.item())
+        uids = {a.external_id: a.annotation_uid for a in Annotation.objects.all()}
+        self.assertTrue(all(uids.values()))
+        self.assertNotIn("alarm:e1", uids.values(), "never the producer's id")
+        self.assertEqual(result["annotations"]["ids"], [
+            {"external_id": "alarm:e1", "annotation_uid": uids["alarm:e1"]},
+            {"external_id": "edge_raw:f-1:abc", "annotation_uid": uids["edge_raw:f-1:abc"]},
+        ])
+
+        moved = self.item()
+        moved["annotations"][1]["bbox_xyxyn"] = [0.5, 0.5, 0.65, 0.7]
+        [result] = self.register(moved)
+        self.assertEqual(result["annotations"]["updated"], 1)
+        self.assertEqual({a.external_id: a.annotation_uid for a in Annotation.objects.all()}, uids)
+
+    def test_bulk_created_annotations_get_one_too(self):
+        [result] = self.register(self.item(annotations=None))
+        pi = ProjectImage.objects.get(pk=result["project_image_id"])
+        Annotation.objects.bulk_create([
+            Annotation(project_image=pi, annotation_class=self.impurity, data=[0, 0, .1, .1],
+                       annotation_source="prediction")
+            for _ in range(2)
+        ])
+        uids = list(Annotation.objects.values_list("annotation_uid", flat=True))
+        self.assertEqual(len(set(uids)), 2)
+        self.assertTrue(all(uids))
+
+    def test_project_image_list_accepts_ingested_annotations(self):
+        from api.routers.projects.schemas import AnnotationOut
+
+        self.impurity.color = "#e53935"
+        self.impurity.save()
+        self.register(self.item())
+        for ann in Annotation.objects.select_related("annotation_class", "annotation_type"):
+            AnnotationOut(
+                id=str(ann.id), annotation_uid=ann.annotation_uid,
+                type=ann.annotation_type.name if ann.annotation_type else None,
+                class_id=ann.annotation_class.class_id, class_name=ann.annotation_class.name,
+                color=ann.annotation_class.color, data=ann.data, source=ann.annotation_source,
+                confidence=ann.confidence, reviewed=ann.reviewed, is_active=ann.is_active,
+                created_at=ann.created_at.isoformat(),
+                created_by=ann.created_by.username if ann.created_by else None,
+            )
+
+
 class RemoveTest(IngestFixture):
     def test_remove_unlinks_but_never_touches_storage_or_human_work(self):
         self.register(self.item())

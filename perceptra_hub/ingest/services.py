@@ -380,7 +380,7 @@ def _sync_annotations(project, pi, user, payload: List[dict], options: IngestOpt
         a.external_id: a for a in Annotation.objects.filter(project_image=pi, external_id__isnull=False)
     }
     counts = {"created": 0, "updated": 0, "unchanged": 0, "removed": 0, "conflicts": [], "errors": []}
-    to_create, to_update, seen = [], [], set()
+    to_create, to_update, seen, pushed = [], [], set(), []
 
     for raw in payload or []:
         ext_id = str(raw.get("external_id") or "").strip()
@@ -390,6 +390,7 @@ def _sync_annotations(project, pi, user, payload: List[dict], options: IngestOpt
             if ext_id in seen:
                 raise IngestError("duplicate annotation external_id in this image")
             seen.add(ext_id)
+            pushed.append(ext_id)
             source = raw.get("source") or SOURCE_PREDICTION
             if source not in ANNOTATION_SOURCE:
                 raise IngestError(f"source must be one of {sorted(ANNOTATION_SOURCE)}")
@@ -465,6 +466,14 @@ def _sync_annotations(project, pi, user, payload: List[dict], options: IngestOpt
             "updated_by",
         ])
         counts["updated"] = len(to_update) - counts["removed"]
+
+    # The platform's own id of each pushed annotation, so the producer can
+    # refer to it (annotation_uid is set on creation, never changed by a push).
+    by_ext = {**existing, **{a.external_id: a for a in to_create}}
+    counts["ids"] = [
+        {"external_id": ext_id, "annotation_uid": by_ext[ext_id].annotation_uid}
+        for ext_id in pushed if ext_id in by_ext
+    ]
 
     if to_create or to_update:
         _refresh_project_image_flags(pi)
