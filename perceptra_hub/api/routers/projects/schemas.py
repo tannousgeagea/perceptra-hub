@@ -221,6 +221,8 @@ class ProjectImagesResponse(BaseModel):
     
 class JobImagesResponce(ProjectImagesResponse):
     job: JobSummary
+    dataset: int = 0       # completed: moved to a dataset
+    marked_null: int = 0
     
    
 class ProjectImageStatusUpdate(BaseModel):

@@ -372,47 +372,11 @@ async def mark_image_as_null(
         
         with transaction.atomic():
             if is_null:
-                # Mark as null (no objects)
-                project_image.marked_as_null = True
-                project_image.status = 'reviewed'  # Keep as annotated (negative sample)
-                project_image.annotated = True  # Considered "done"
-                project_image.reviewed = True
-                
-                # Soft delete all existing annotations (if any)
-                deleted_count = Annotation.objects.filter(
-                    project_image=project_image,
-                    is_active=True
-                ).update(
-                    is_active=False, 
-                    is_deleted=True,
-                    deleted_by=user,
-                    deleted_at=timezone.now()
-                )
-                
-                # Store metadata
-                if not project_image.metadata:
-                    project_image.metadata = {}
-                
-                project_image.metadata['null_status'] = {
-                    'is_null': True,
-                    'reason': reason or 'No objects of interest',
-                    'marked_by': user.username if user else None,
-                    'marked_at': timezone.now().isoformat(),
-                    'annotations_removed': deleted_count
-                }
-            else:
-                # Unmark as null
-                project_image.marked_as_null = False
-                project_image.status = 'unannotated'
-                project_image.annotated = False
-                project_image.reviewed = False
-                
-                # Update metadata
-                if project_image.metadata and 'null_status' in project_image.metadata:
-                    project_image.metadata['null_status']['is_null'] = False
-                    project_image.metadata['null_status']['unmarked_at'] = timezone.now().isoformat()
-                    project_image.metadata['null_status']['unmarked_by'] = user.username if user else None
-            
+                project_image.apply_null_mark(user=user, reason=reason)
+            elif project_image.marked_as_null:
+                # Unmarking a non-null image is a no-op: it must not reset
+                # a normally annotated / reviewed image.
+                project_image.clear_null_mark(user=user)
             project_image.save()
             
         return project_image
@@ -480,55 +444,15 @@ async def bulk_mark_images_as_null(
             for img in images:
                 try:
                     if is_null:
-                        # Skip if already null
                         if img.marked_as_null:
                             skipped += 1
                             continue
-
-                        img.marked_as_null = True
-                        img.status = "reviewed"
-                        img.annotated = True
-                        img.reviewed = True
-
-                        # Soft delete annotations
-                        deleted_count = Annotation.objects.filter(
-                            project_image=img,
-                            is_active=True
-                        ).update(
-                            is_active=False,
-                            is_deleted=True,
-                            deleted_by=user,
-                            deleted_at=now
-                        )
-
-                        if not img.metadata:
-                            img.metadata = {}
-
-                        img.metadata["null_status"] = {
-                            "is_null": True,
-                            "reason": reason or "No objects of interest",
-                            "marked_by": user.username if user else None,
-                            "marked_at": now.isoformat(),
-                            "annotations_removed": deleted_count,
-                        }
-
+                        img.apply_null_mark(user=user, reason=reason, now=now)
                     else:
-                        # Skip if already not null
                         if not img.marked_as_null:
                             skipped += 1
                             continue
-
-                        img.marked_as_null = False
-                        img.status = "unannotated"
-                        img.annotated = False
-                        img.reviewed = False
-
-                        if img.metadata and "null_status" in img.metadata:
-                            img.metadata["null_status"]["is_null"] = False
-                            img.metadata["null_status"]["unmarked_at"] = now.isoformat()
-                            img.metadata["null_status"]["unmarked_by"] = (
-                                user.username if user else None
-                            )
+                        img.clear_null_mark(user=user, now=now)
 
                     # 🔥 Triggers post_save
                     img.save()

@@ -455,6 +455,96 @@ class ProjectImage(models.Model):
         self.finalized = True
         self.status = 'dataset'
         self.save()
+
+    # ---- Null (empty / negative sample) flag ----
+    # Callers own the transaction and the final save().
+
+    def apply_null_mark(self, user=None, reason=None, now=None) -> int:
+        """
+        Flag the image as containing nothing to label. Active annotations are
+        soft-deleted and their ids remembered, so clear_null_mark() can bring
+        them back. Returns the number of annotations removed.
+        """
+        from django.utils import timezone
+        from annotations.models import Annotation
+
+        now = now or timezone.now()
+        active = Annotation.objects.filter(project_image=self, is_active=True)
+        removed_ids = list(active.values_list('id', flat=True))
+        active.update(is_active=False, is_deleted=True, deleted_by=user, deleted_at=now)
+
+        self.marked_as_null = True
+        self.annotated = True   # "done": a negative sample
+        self.reviewed = True
+        self.status = 'reviewed'
+        self.metadata = self.metadata or {}
+        self.metadata['null_status'] = {
+            'is_null': True,
+            'reason': reason or 'No objects of interest',
+            'marked_by': user.username if user else None,
+            'marked_at': now.isoformat(),
+            'annotations_removed': len(removed_ids),
+            'removed_annotation_ids': removed_ids,
+        }
+        return len(removed_ids)
+
+    def clear_null_mark(self, user=None, now=None, restore_annotations=True) -> int:
+        """
+        Revert a null flag. Annotations removed by apply_null_mark() are
+        restored (when still soft-deleted), and the image goes back to
+        'annotated' or 'unannotated' for re-review. A finalized image leaves
+        the dataset, since it is no longer a confirmed sample.
+        Returns the number of annotations restored.
+        """
+        from django.utils import timezone
+        from annotations.models import Annotation
+
+        now = now or timezone.now()
+        null_status = (self.metadata or {}).get('null_status') or {}
+
+        restored = 0
+        if restore_annotations and null_status.get('removed_annotation_ids'):
+            restored = Annotation.objects.filter(
+                project_image=self,
+                id__in=null_status['removed_annotation_ids'],
+                is_deleted=True,
+            ).update(is_active=True, is_deleted=False, deleted_by=None, deleted_at=None)
+
+        has_annotations = Annotation.objects.filter(project_image=self, is_active=True).exists()
+
+        self.marked_as_null = False
+        self.finalized = False
+        self.reviewed = False
+        self.annotated = has_annotations
+        self.status = 'annotated' if has_annotations else 'unannotated'
+        if null_status:
+            null_status.update({
+                'is_null': False,
+                'unmarked_at': now.isoformat(),
+                'unmarked_by': user.username if user else None,
+                'annotations_restored': restored,
+            })
+            null_status.pop('removed_annotation_ids', None)
+            self.metadata['null_status'] = null_status
+        return restored
+
+    def note_annotation_added(self) -> list:
+        """
+        An annotation was drawn on this image: it is annotated, and it can no
+        longer be an empty (null) sample. Returns the fields that changed, for
+        save(update_fields=...); empty when nothing changed.
+        """
+        if self.marked_as_null:
+            self.marked_as_null = False
+            self.reviewed = False
+            self.annotated = True
+            self.status = 'annotated'
+            return ['marked_as_null', 'reviewed', 'annotated', 'status']
+        if not self.annotated or self.status == 'unannotated':
+            self.annotated = True
+            self.status = 'annotated'
+            return ['annotated', 'status']
+        return []
     
     @property
     def annotation_progress(self) -> str:

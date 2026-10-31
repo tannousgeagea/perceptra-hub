@@ -136,11 +136,10 @@ async def create_annotation(
                 
                 annotation.save()
                 
-            # Update project image status
-            if not project_image.annotated:
-                project_image.annotated = True
-                project_image.status = 'annotated'
-                project_image.save(update_fields=['annotated', 'status'])
+            # Update project image status (also clears a stale null flag)
+            changed = project_image.note_annotation_added()
+            if changed:
+                project_image.save(update_fields=changed)
         
         return {
             "message": "Annotation created successfully" if created else "Annotation update successffully",
