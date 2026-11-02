@@ -4,7 +4,8 @@ Update a project's editable details.
     PATCH /api/v1/projects/{project_id}
 
 Only the fields present in the body are changed. Project owners/admins (and
-org admins/owners) may edit. Names are unique per organization → 409.
+org admins/owners) may edit — including inactive projects, so they can be
+reactivated. Names are unique per organization → 409.
 """
 from uuid import UUID
 
@@ -13,7 +14,8 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from api.dependencies import ProjectContext, get_project_context
+from api.dependencies import ProjectContext
+from projects.dependencies import get_project_context_including_inactive
 from api.routers.projects.schemas import ProjectListItem, ProjectUpdate
 from api.routers.projects.queries.project_details import fetch_project_details
 from projects.models import Visibility
@@ -31,7 +33,8 @@ EDITABLE_FIELDS = ("name", "description", "thumbnail_url", "is_active")
 async def update_project(
     project_id: UUID,
     payload: ProjectUpdate,
-    project_ctx: ProjectContext = Depends(get_project_context),
+    # Inactive projects must stay editable, or they could never be reactivated.
+    project_ctx: ProjectContext = Depends(get_project_context_including_inactive),
 ):
     project_ctx.require_project_role("owner", "admin")
     changes = payload.model_dump(exclude_unset=True)
