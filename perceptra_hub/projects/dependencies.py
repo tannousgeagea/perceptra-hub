@@ -52,3 +52,21 @@ async def get_project_context(
         project=project,
         project_role=project_role,
     )
+
+
+async def get_project_context_including_inactive(
+    project_id: UUID,
+    ctx: RequestContext = Depends(get_request_context),
+) -> ProjectContext:
+    """
+    Like get_project_context, but also resolves inactive (archived) projects.
+    Only for endpoints that manage the project itself — e.g. reactivating it.
+    """
+    project, project_role = await fetch_project_with_access_check(
+        ctx.user,
+        ctx.organization,
+        ctx.role,
+        project_id,
+        include_inactive=True,
+    )
+    return ProjectContext(org_ctx=ctx, project=project, project_role=project_role)

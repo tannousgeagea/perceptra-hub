@@ -7,7 +7,7 @@ working previous / next.
 
 The position is computed in the same list the job view shows: the job's
 images ordered by id, filtered by the image's own status tab
-(unannotated / annotated / reviewed; any other status → the unfiltered list).
+(unannotated / annotated / reviewed / dataset; any other status → the unfiltered list).
 """
 from typing import Optional
 from uuid import UUID
@@ -21,7 +21,7 @@ from jobs.models import Job, JobImage
 
 router = APIRouter(prefix="/projects")
 
-STATUS_TABS = ("unannotated", "annotated", "reviewed")
+STATUS_TABS = ("unannotated", "annotated", "reviewed", "dataset")
 
 
 class JobImagePosition(BaseModel):

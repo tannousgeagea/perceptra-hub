@@ -47,3 +47,24 @@ async def delete_project(
     
     await delete_project_record(ctx.organization, project_id, ctx.user, hard_delete)
 
+
+
+@router.post("/{project_id}/restore", summary="Restore a Deleted Project")
+async def restore_project(
+    project_id: UUID,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Undo a soft delete. Same permission as deleting."""
+    ctx.require_role('admin', 'owner')
+
+    @sync_to_async
+    def restore(org, project_id):
+        project = Project.objects.filter(project_id=project_id, organization=org).first()
+        if project is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        if project.is_deleted:
+            project.restore()
+        return project
+
+    project = await restore(ctx.organization, project_id)
+    return {"project_id": str(project.project_id), "is_deleted": project.is_deleted}

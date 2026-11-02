@@ -416,10 +416,9 @@ class SuggestionService:
                 created_by=user,
                 updated_by=user,
             )
-            if not image.annotated:
-                image.annotated = True
-                image.status = "annotated"
-                image.save(update_fields=["annotated", "status"])
+            changed = image.note_annotation_added()
+            if changed:
+                image.save(update_fields=changed)
 
         return uid
     

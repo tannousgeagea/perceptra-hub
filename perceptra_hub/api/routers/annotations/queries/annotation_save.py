@@ -133,10 +133,9 @@ def save_annotations(
                     annotation_source="manual",
                 )
                 
-                if not project_image.annotated or project_image.status == "unannotated":
-                    project_image.annotated = True
-                    project_image.status = "annotated"
-                    project_image.save(update_fields=["annotated", "status"])
+                changed = project_image.note_annotation_added()
+                if changed:
+                    project_image.save(update_fields=changed)
                     
                 return {"message": "Annotations created successfully."}
             
@@ -152,10 +151,9 @@ def save_annotations(
             annotation.annotation_source = "manual"
             annotation.save()
 
-            if not project_image.annotated or project_image.status == "unannotated":
-                project_image.annotated = True
-                project_image.status = "annotated"
-                project_image.save(update_fields=["annotated", "status"])
+            changed = project_image.note_annotation_added()
+            if changed:
+                project_image.save(update_fields=changed)
 
             return {"message": "Annotations updated successfully.", "status": project_image.annotated}
         

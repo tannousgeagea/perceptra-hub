@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 import logging
 from asgiref.sync import sync_to_async
+from django.db.models import Count, Q
 
 from api.routers.projects.schemas import JobImagesResponce
 from api.dependencies import get_project_context, ProjectContext
@@ -29,6 +30,58 @@ def get_dowload_url(image:Image, expiration:int=3600):
     return image.get_download_url(expiration=expiration)
 
 
+# The job view's tabs, in display order. 'dataset' = completed (moved to a dataset).
+JOB_IMAGE_TABS = ("unannotated", "annotated", "reviewed", "dataset")
+
+
+class JobImageCounts(BaseModel):
+    unannotated: int = 0
+    annotated: int = 0
+    reviewed: int = 0
+    dataset: int = 0
+    marked_null: int = 0
+    total: int = 0
+
+
+def count_job_images(job_images_qs) -> dict:
+    """All tab counts in a single aggregate query."""
+    aggregates = {
+        tab: Count("id", filter=Q(project_image__status=tab)) for tab in JOB_IMAGE_TABS
+    }
+    aggregates["marked_null"] = Count("id", filter=Q(project_image__marked_as_null=True))
+    aggregates["total"] = Count("id")
+    return job_images_qs.aggregate(**aggregates)
+
+
+def _get_job_or_404(project, job_id) -> Job:
+    try:
+        return Job.objects.get(id=job_id, project=project)
+    except Job.DoesNotExist:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+
+@router.get(
+    "/{project_id}/jobs/{job_id}/images/counts",
+    summary="Job Image Counts per Tab",
+    response_model=JobImageCounts,
+)
+async def job_image_counts(
+    project_id: UUID,
+    job_id: int,
+    project_ctx: ProjectContext = Depends(get_project_context),
+):
+    """Per-status image counts for a job — cheap enough to poll, independent of paging."""
+
+    @sync_to_async
+    def counts():
+        job = _get_job_or_404(project_ctx.project, job_id)
+        return count_job_images(
+            JobImage.objects.filter(job=job, project_image__is_active=True)
+        )
+
+    return await counts()
+
+
 @router.get(
     "/{project_id}/jobs/{job_id}/images", 
     summary="List Job Images",
@@ -47,11 +100,15 @@ async def list_job_images(
         description="Search query (e.g., 'status:annotated tag:car min-width:1920')",
         alias="q"
     ),
+    include_counts: bool = Query(
+        True,
+        description="Include per-tab counts. Clients that poll /images/counts separately can pass false.",
+    ),
 ):
     """List images assigned to a job.
     
     **Query Syntax:**
-    - `status:annotated|unannotated|reviewed` - Filter by status
+    - `status:annotated|unannotated|reviewed|dataset` - Filter by status
     - `annotated:true|false` - Filter by annotated flag
     - `reviewed:true|false` - Filter by reviewed flag
     - `marked-null:true|false` - Filter null images
@@ -75,24 +132,15 @@ async def list_job_images(
     
     @sync_to_async
     def get_job_images(project, job_id, skip, limit, status_filter, annotated, query):
-        # Verify job belongs to project
-        try:
-            job = Job.objects.get(id=job_id, project=project)
-        except Job.DoesNotExist:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Job not found"
-            )
-        
+        job = _get_job_or_404(project, job_id)
+
         # Get job images
         queryset = JobImage.objects.filter(
             job=job,
             project_image__is_active=True
         ).select_related('project_image').order_by('id')
-        
-        annotated_count = queryset.filter(project_image__status='annotated').count()
-        reviewed_count = queryset.filter(project_image__status='reviewed').count()
-        unannotated_count = queryset.filter(project_image__status='unannotated').count()
+
+        counts = count_job_images(queryset) if include_counts else {}
         
         if query:
             filters = parse_project_image_query(query)
@@ -122,9 +170,11 @@ async def list_job_images(
         
         return {
             "total": total,
-            "annotated": annotated_count,
-            "unannotated": unannotated_count,
-            "reviewed": reviewed_count,
+            "annotated": counts.get("annotated", 0),
+            "unannotated": counts.get("unannotated", 0),
+            "reviewed": counts.get("reviewed", 0),
+            "dataset": counts.get("dataset", 0),
+            "marked_null": counts.get("marked_null", 0),
             "image_ids": list(map(str, image_ids)),
             "project_image_ids": list(map(str, project_image_ids)),
             "job": {

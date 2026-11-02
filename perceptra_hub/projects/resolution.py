@@ -25,6 +25,7 @@ def fetch_project_with_access_check(
     organization: Organization,
     org_role: Optional[Role],
     project_id: UUID,
+    include_inactive: bool = False,
 ) -> Tuple[Project, Optional[Role]]:
     """
     Fetch a project and verify the requesting user has access.
@@ -36,17 +37,18 @@ def fetch_project_with_access_check(
     Returns:
         (project, project_role)  — project_role is None for org admins.
 
+    Inactive (archived) projects are hidden unless include_inactive=True,
+    which only endpoints that manage the project itself should pass.
+
     Raises:
         HTTPException 404: Project not found in this organization.
         HTTPException 403: User has no access.
     """
+    lookup = dict(project_id=project_id, organization=organization, is_deleted=False)
+    if not include_inactive:
+        lookup['is_active'] = True
     try:
-        project = Project.objects.select_related('organization').get(
-            project_id=project_id,
-            organization=organization,
-            is_deleted=False,
-            is_active=True,
-        )
+        project = Project.objects.select_related('organization').get(**lookup)
     except Project.DoesNotExist:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
