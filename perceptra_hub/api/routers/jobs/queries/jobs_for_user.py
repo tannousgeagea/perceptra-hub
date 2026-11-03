@@ -47,6 +47,8 @@ def get_jobs_for_user(
         project__organization=ctx.organization,
         ).exclude(
             status="completed"
+            ).select_related(
+                "project", "assignee"  # read for every job below
             ).order_by(
                 "-created_at"
             )
