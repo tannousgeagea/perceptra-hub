@@ -114,6 +114,11 @@ async def create_annotation(
                 annotation.annotation_class = annotation_class
                 annotation.data = data.data
                 annotation.updated_by = user
+                # Re-saving a soft-deleted uid revives it (client-side undo of a delete).
+                annotation.is_deleted = False
+                annotation.is_active = True
+                annotation.deleted_at = None
+                annotation.deleted_by = None
                 annotation.save()
                 created = False
             else:   
@@ -183,6 +188,7 @@ async def batch_create_annotations(
     for ann_data in data.annotations:
         result = await create_annotation(
             project_id=project_id,
+            project_image_id=data.project_image_id,
             data=ann_data,
             project_ctx=project_ctx
         )
