@@ -52,12 +52,15 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=origins,
         allow_methods=["*"],
-        allow_headers=["X-Requested-With", "X-Request-ID", "X-Organization-ID", "X-Organization-Slug", "X-API-Key", "Authorization"],
+        allow_headers=["X-Requested-With", "X-Request-ID", "X-Organization-ID", "X-Organization-Slug", "X-API-Key", "Authorization", "X-Client-ID"],
         expose_headers=["X-Request-ID", "X-Progress-ID", "x-response-time", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"],
     )
     
     from api.middleware.api_key_middleware import APIKeyMiddleware
     app.add_middleware(APIKeyMiddleware)
+
+    from api.middleware.realtime_middleware import RealtimeMiddleware
+    app.add_middleware(RealtimeMiddleware)
 
     app.celery_app = celery_app
 
