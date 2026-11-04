@@ -1,85 +1,102 @@
+"""
+Per-member job progress for the current organization (Team page).
+
+The organization comes from the request context (X-Organization-ID), like
+every other /organizations/<name> endpoint; only org admins and owners may
+read it. Everything is computed with two aggregate queries, scoped to the
+organization's active projects, jobs and images.
+"""
+from collections import defaultdict
+
+from asgiref.sync import sync_to_async
+from django.db.models import Count, Q
 from fastapi import APIRouter, Depends
-from users.models import CustomUser as User
-from organizations.models import Organization
-from memberships.models import OrganizationMembership
+
+from api.dependencies import RequestContext, require_organization_admin
 from jobs.models import Job, JobImage
-from pydantic import BaseModel
-from typing import Optional
-from fastapi import Path
-from api.routers.auth.queries.dependencies import (
-    organization_access_dependency
-)
+from memberships.models import OrganizationMembership
 
 router = APIRouter()
 
-# class OrgMemberOut(BaseModel):
-#     id: int
-#     username: str
-#     email: str
-#     role: str
 
-@router.get("/organizations/{org_id}/progress")
-def fetch_user_progress(
-    org_id: int,
-    _membership=Depends(organization_access_dependency)
-):
-    memberships = OrganizationMembership.objects.filter(
-        organization_id=org_id
-    ).select_related("user", "role")
+def _display_name(user) -> str:
+    full = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    return full or user.username
 
+
+@sync_to_async
+def _progress(organization):
+    roles = {
+        m.user_id: m.role.name
+        for m in OrganizationMembership.objects.filter(
+            organization=organization, status="active"
+        ).select_related("role")
+    }
+
+    jobs = list(
+        Job.objects.filter(
+            project__organization=organization,
+            project__is_deleted=False,
+            is_active=True,
+            assignee_id__in=roles.keys(),
+        )
+        .select_related("assignee")
+        .order_by("created_at")
+    )
+
+    counts = {
+        row["job_id"]: row
+        for row in JobImage.objects.filter(
+            job__in=jobs, is_active=True, project_image__is_active=True
+        )
+        .values("job_id")
+        .annotate(
+            total=Count("id"),
+            annotated=Count("id", filter=Q(project_image__status="annotated")),
+            reviewed=Count("id", filter=Q(project_image__status="reviewed")),
+            completed=Count("id", filter=Q(project_image__status="dataset")),
+        )
+    }
+
+    by_user = defaultdict(list)
+    for job in jobs:
+        by_user[job.assignee_id].append(job)
 
     data = []
-    for m in memberships:
-        jobs = Job.objects.filter(assignee=m.user).order_by('created_at')
-        if not jobs:
-            continue
-        
-        assigned_jobs = []
-        image_count, annotated_images, reviewed_images, completed_images = 0, 0, 0, 0
-        for job in jobs:
-            project_images = JobImage.objects.filter(job=job, project_image__is_active=True)
-            image_count += project_images.count()
-            annotated_images += project_images.filter(project_image__status="annotated").count()
-            reviewed_images += project_images.filter(project_image__status="reviewed").count()
-            completed_images += project_images.filter(project_image__status="dataset").count()
-            assigned_jobs.append(
-                {
-                    "jobId": f"{job.id}",
-                    "jobName": f"{job.name}",
-                    "totalImages": project_images.count(),
-                    "annotatedImages": project_images.filter(project_image__status="annotated").count(),
-                    "reviewedImages": project_images.filter(project_image__status="reviewed").count(),
-                    "completedImages": project_images.filter(project_image__status="dataset").count(),
-                }
-            )
-        
+    for user_id, user_jobs in by_user.items():
+        user = user_jobs[0].assignee
+        totals = {"total": 0, "annotated": 0, "reviewed": 0, "completed": 0}
+        assigned = []
+        for job in user_jobs:
+            c = counts.get(job.id, {})
+            for key in totals:
+                totals[key] += c.get(key, 0)
+            assigned.append({
+                "jobId": str(job.job_id),
+                "jobName": job.name,
+                "totalImages": c.get("total", 0),
+                "annotatedImages": c.get("annotated", 0),
+                "reviewedImages": c.get("reviewed", 0),
+                "completedImages": c.get("completed", 0),
+            })
+        role = roles.get(user_id, "")
         data.append({
-            "userId": str(m.user.id),
-            "userName": f"{m.user.username}",
-            "userRole": f"{m.role.name}",
-            "role": m.role.name,
-            "avatarUrl": "undefined",
-            "totalImages": image_count,
-            "annotatedImages": annotated_images,
-            "reviewedImages": reviewed_images,
-            "completedImages": completed_images,
-            "progressPercentage": round((completed_images / image_count) * 100, 2),
-            "lastUpdated": jobs.last().updated_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "assignedJobs": assigned_jobs
-
+            "userId": str(user_id),
+            "userName": _display_name(user),
+            "userRole": role,
+            "role": role,
+            "avatarUrl": None,
+            "totalImages": totals["total"],
+            "annotatedImages": totals["annotated"],
+            "reviewedImages": totals["reviewed"],
+            "completedImages": totals["completed"],
+            "progressPercentage": round(totals["completed"] / totals["total"] * 100, 2) if totals["total"] else 0.0,
+            "lastUpdated": max(j.updated_at for j in user_jobs).isoformat(),
+            "assignedJobs": assigned,
         })
-
     return data
 
-"""
-      userId: "user-1",
-      userName: "Alice Johnson",
-      userRole: "Senior Annotator",
-      avatarUrl: undefined,
-      totalImages: 425,
-      annotatedImages: 320,
-      reviewedImages: 280,
-      completedImages: 250,
-      progressPercentage: 75.3,
-      lastUpdated: new Date("2024-06-04T14:30:00Z"),
-"""
+
+@router.get("/organizations/progress")
+async def fetch_user_progress(ctx: RequestContext = Depends(require_organization_admin())):
+    return await _progress(ctx.organization)

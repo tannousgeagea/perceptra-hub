@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     'api_keys',
     'similarity',
     'ingest',
+    'realtime',
 ]
 
 MIDDLEWARE = [

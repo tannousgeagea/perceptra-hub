@@ -296,6 +296,7 @@ class SuggestionService:
                 source='prediction',
                 user=user,
                 polygons=polygons,
+                uid=str(sid),
             )
             created_uids.append(uid)
 
@@ -361,7 +362,7 @@ class SuggestionService:
     @sync_to_async
     def _create_annotation(
         self, project, image_id, bbox, class_id, confidence, source, user,
-        polygons=None,
+        polygons=None, uid=None,
     ) -> str:
         """Create annotation, optionally storing the SAM polygon contour."""
         from annotations.models import Annotation, AnnotationClass, AnnotationType
@@ -397,7 +398,9 @@ class SuggestionService:
             except Exception:
                 normalized_polygon = None
 
-        uid = str(uuid_lib.uuid4())
+        # The annotator keys the accepted box by its suggestion id, so the
+        # annotation reuses it — later edits/deletes from the canvas hit this row.
+        uid = uid or str(uuid_lib.uuid4())
         with transaction.atomic():
             Annotation.objects.create(
                 project_image=image,
