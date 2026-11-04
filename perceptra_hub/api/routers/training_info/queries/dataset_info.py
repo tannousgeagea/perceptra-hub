@@ -2,7 +2,8 @@
 import time
 from fastapi.routing import APIRoute
 from fastapi import Request, Response
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from api.dependencies import RequestContext, get_request_context
 from typing import List, Callable
 from projects.models import Version, Project
 from django.db.models import Count
@@ -37,11 +38,13 @@ router = APIRouter(
 )
 
 @router.get("/datasets/{project_id}", response_model=List[DatasetOut])
-def list_project_datasets(project_id: str):
+def list_project_datasets(project_id: str, ctx: RequestContext = Depends(get_request_context)):
     try:
         # Check if the project exists
         try:
-            project = Project.objects.get(name=project_id)
+            project = Project.objects.get(
+                name=project_id, organization=ctx.organization, is_deleted=False
+            )
         except Project.DoesNotExist:
             raise HTTPException(status_code=404, detail="Project not found.")
 

@@ -1,6 +1,7 @@
 # api/validation_result.py
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from api.dependencies import RequestContext, get_request_context
 from ml_models.models import ModelVersion
 from inferences.models import PredictionImageResult, PredictionOverlay
 from annotations.models import Annotation
@@ -34,10 +35,11 @@ def convert_bbox(bbox, width:int, height:int):
 def get_validation_images(
     model_version_id: int,
     limit: int = Query(10, ge=1, le=100),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    ctx: RequestContext = Depends(get_request_context),
     ):
     try:
-        model_version = ModelVersion.objects.get(id=model_version_id)
+        model_version = ModelVersion.objects.get(id=model_version_id, model__organization=ctx.organization)
     except ModelVersion.DoesNotExist:
         raise HTTPException(status_code=404, detail="ModelVersion not found")
 

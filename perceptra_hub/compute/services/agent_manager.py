@@ -312,8 +312,32 @@ class AgentManager:
         return assignment
     
     @classmethod
+    def _agent_training_job(cls, agent: Agent, job_id: str, *related: str) -> TrainingJob:
+        """
+        The training job `job_id`, if `agent` may report on it: the job must
+        belong to the agent's organization and, while the Redis assignment
+        exists, be the one assigned to this agent. Raises TrainingJob.DoesNotExist
+        otherwise, so callers treat it like an unknown job.
+        """
+        training_job = TrainingJob.objects.select_related(*related).get(
+            job_id=job_id,
+            training_session__model_version__model__organization=agent.organization,
+        )
+        raw = cache.get(cls.JOB_ASSIGNMENT_KEY.format(job_id=job_id))
+        if raw:
+            assignment = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+            assigned_to = assignment.get('agent_id') if isinstance(assignment, dict) else None
+            if assigned_to and str(assigned_to) != str(agent.agent_id):
+                logger.warning(
+                    f"Agent {agent.agent_id} reported on job {job_id} assigned to agent {assigned_to}; ignored"
+                )
+                raise TrainingJob.DoesNotExist
+        return training_job
+
+    @classmethod
     def update_job_progress(
         cls,
+        agent: Agent,
         job_id: str,
         status: str,
         progress: float,
@@ -324,10 +348,8 @@ class AgentManager:
         Update training job progress from agent.
         """
         try:
-            training_job = TrainingJob.objects.select_related(
-                'training_session'
-            ).get(job_id=job_id)
-            
+            training_job = cls._agent_training_job(agent, job_id, 'training_session')
+
             session = training_job.training_session
             
             # Update session
@@ -364,11 +386,12 @@ class AgentManager:
             logger.debug(f"Updated job {job_id}: {status} ({progress}%)")
             
         except TrainingJob.DoesNotExist:
-            logger.error(f"Training job not found: {job_id}")
+            logger.error(f"Training job not found for agent {agent.agent_id}: {job_id}")
     
     @classmethod
     def complete_job(
         cls,
+        agent: Agent,
         job_id: str,
         success: bool,
         artifacts: Dict[str, str],
@@ -379,11 +402,10 @@ class AgentManager:
         Mark job as complete and store artifacts.
         """
         try:
-            training_job = TrainingJob.objects.select_related(
-                'training_session',
-                'training_session__model_version'
-            ).get(job_id=job_id)
-            
+            training_job = cls._agent_training_job(
+                agent, job_id, 'training_session', 'training_session__model_version'
+            )
+
             session = training_job.training_session
             model_version = session.model_version
             
@@ -426,7 +448,7 @@ class AgentManager:
                 cache.delete(assignment_key)
                 
         except TrainingJob.DoesNotExist:
-            logger.error(f"Training job not found: {job_id}")
+            logger.error(f"Training job not found for agent {agent.agent_id}: {job_id}")
     
     @classmethod
     def mark_stale_agents_offline(cls):

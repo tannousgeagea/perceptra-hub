@@ -2,7 +2,7 @@
 Alert Management API Endpoints
 """
 
-from fastapi import APIRouter, Path, Body, HTTPException
+from fastapi import APIRouter, Path, Body, Depends, HTTPException
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel
@@ -10,9 +10,18 @@ from pydantic import BaseModel
 from temporal_analysis.models import MetricAlert
 from projects.models import Project
 from api.routers.alerts.schemas import AlertResponse, AlertStats, AcknowledgeRequest
+from api.dependencies import RequestContext, get_request_context
 
 
 router = APIRouter(prefix="/alerts",)
+
+
+def _org_project(ctx: RequestContext, project_id: int) -> Project:
+    """The project, if it belongs to the caller's organization (404 otherwise)."""
+    try:
+        return Project.objects.get(id=project_id, organization=ctx.organization, is_deleted=False)
+    except Project.DoesNotExist:
+        raise HTTPException(status_code=404, detail="Project not found")
 
 
 # ============================================================================
@@ -24,23 +33,20 @@ router = APIRouter(prefix="/alerts",)
     response_model=List[AlertResponse],
     summary="Get alerts for a project"
 )
-async def get_project_alerts(
+def get_project_alerts(
     project_id: int = Path(...),
     acknowledged: Optional[bool] = None,
     severity: Optional[str] = None,
     limit: int = 100,
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """
     Get alerts for a project.
     Filter by acknowledged status and severity.
     """
     
-    # Verify project
-    try:
-        project = Project.objects.get(id=project_id, is_deleted=False)
-    except Project.DoesNotExist:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
+    project = _org_project(ctx, project_id)
+
     # Build query
     alerts = MetricAlert.objects.filter(
         project_id=project_id
@@ -81,11 +87,13 @@ async def get_project_alerts(
     response_model=AlertStats,
     summary="Get alert statistics"
 )
-async def get_alert_stats(project_id: int = Path(...)):
+def get_alert_stats(project_id: int = Path(...), ctx: RequestContext = Depends(get_request_context)):
     """Get alert statistics for a project"""
-    
+
     from django.db.models import Count, Q
-    
+
+    _org_project(ctx, project_id)
+
     stats = MetricAlert.objects.filter(
         project_id=project_id
     ).aggregate(
@@ -110,29 +118,25 @@ async def get_alert_stats(project_id: int = Path(...)):
     response_model=AlertResponse,
     summary="Acknowledge an alert"
 )
-async def acknowledge_alert(
+def acknowledge_alert(
     alert_id: int = Path(...),
-    request: AcknowledgeRequest = Body(...),
+    request: Optional[AcknowledgeRequest] = Body(None),
+    ctx: RequestContext = Depends(get_request_context),
 ):
-    """Mark an alert as acknowledged"""
-    
-    from django.contrib.auth import get_user_model
+    """Mark an alert as acknowledged, by the signed-in user."""
+
     from django.utils import timezone
-    
-    User = get_user_model()
-    
+
     try:
-        alert = MetricAlert.objects.select_related('project').get(id=alert_id)
+        alert = MetricAlert.objects.select_related('project').get(
+            id=alert_id, project__organization=ctx.organization
+        )
     except MetricAlert.DoesNotExist:
         raise HTTPException(status_code=404, detail="Alert not found")
-    
-    # Get user
-    try:
-        user = User.objects.get(username=request.acknowledged_by)
-    except User.DoesNotExist:
-        # If user not found, just store username as string
-        user = None
-    
+
+    # The acknowledger is whoever is signed in; a name in the body is ignored.
+    user = ctx.effective_user
+
     # Update alert
     alert.is_acknowledged = True
     alert.acknowledged_at = timezone.now()
@@ -153,5 +157,5 @@ async def acknowledge_alert(
         created_at=alert.alert_date,
         is_acknowledged=True,
         acknowledged_at=alert.acknowledged_at,
-        acknowledged_by=request.acknowledged_by
+        acknowledged_by=user.username if user else None
     )

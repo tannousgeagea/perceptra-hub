@@ -2,7 +2,7 @@
 Active Learning API Endpoints
 """
 
-from fastapi import APIRouter, Query, Path
+from fastapi import APIRouter, Depends, Query
 from typing import List, Optional
 from pydantic import BaseModel
 
@@ -10,6 +10,7 @@ from projects.models import Project, ProjectImage
 from annotations.models import Annotation
 from django.db.models import Count, Min, Max, Avg
 from api.routers.active_learning.schemas import *
+from api.dependencies import ProjectContext, get_project_context
 
 router = APIRouter(prefix="/active-learning",)
 
@@ -23,11 +24,19 @@ router = APIRouter(prefix="/active-learning",)
     response_model=List[PriorityImage],
     summary="Get prioritized images for review"
 )
-async def suggest_images_to_review(
-    project_id: int = Path(...),
+def suggest_images_to_review(
     strategy: str = Query("hybrid", description="uncertainty|diversity|error_prone|hybrid"),
     limit: int = Query(50, ge=1, le=200),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
+    """
+    {project_id} is the project's UUID; the caller needs access to the project.
+    """
+    project_ctx.require_project_access()
+    return _prioritize(project_ctx.project, strategy, limit)
+
+
+def _prioritize(project: Project, strategy: str, limit: int) -> List[PriorityImage]:
     """
     Get images prioritized for review using active learning.
     
@@ -40,7 +49,7 @@ async def suggest_images_to_review(
     
     # Get unreviewed images with predictions
     images = ProjectImage.objects.filter(
-        project_id=project_id,
+        project=project,
         reviewed=False,
         annotated=True,
         is_active=True
@@ -128,20 +137,17 @@ async def suggest_images_to_review(
     response_model=BatchSuggestion,
     summary="Get balanced batch for review"
 )
-async def suggest_review_batch(
-    project_id: int = Path(...),
+def suggest_review_batch(
     batch_size: int = Query(20, ge=1, le=100),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
     """
     Get a balanced batch of images ensuring class diversity.
     """
     
     # Get suggestions
-    suggestions = await suggest_images_to_review(
-        project_id=project_id,
-        strategy="hybrid",
-        limit=batch_size * 2
-    )
+    project_ctx.require_project_access()
+    suggestions = _prioritize(project_ctx.project, "hybrid", batch_size * 2)
     
     # Balance by class (simple implementation)
     selected = []
@@ -154,7 +160,7 @@ async def suggest_review_batch(
         # Check class balance
         img_classes = set(img.classes)
         overrepresented = any(
-            class_counts.get(cls, 0) >= batch_size / len(class_counts) + 2
+            class_counts.get(cls, 0) >= batch_size / max(len(class_counts), 1) + 2
             for cls in img_classes
         )
         

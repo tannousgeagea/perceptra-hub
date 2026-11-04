@@ -3,7 +3,8 @@ import cv2
 import time
 import random
 import numpy as np
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from api.dependencies import RequestContext, get_request_context
 from datetime import datetime
 from typing import Callable
 from fastapi import Request
@@ -40,7 +41,10 @@ REMOTE_INFERENCE_URL = "http://10.7.0.6:8081/infer"
 @router.api_route(
     "/analyse", methods=["POST"], tags=["Analysis"]
     )
-async def analyse_image(file: UploadFile = File(...)):
+async def analyse_image(
+    file: UploadFile = File(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
     try:
         # contents = await file.read()
         # nparr = np.fromstring(contents, np.uint8)

@@ -3,7 +3,8 @@ import time
 from datetime import datetime
 from typing import Callable, Optional
 from fastapi import Request, Response
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from api.dependencies import RequestContext, get_request_context
 from fastapi.routing import APIRoute
 from typing import List
 from pydantic import BaseModel
@@ -43,13 +44,15 @@ class TagIn(BaseModel):
     description: Optional[str] = None
 
 @router.get("/tags", response_model=List[TagOut])
-def list_tags():
-    return ModelTag.objects.all()
+def list_tags(ctx: RequestContext = Depends(get_request_context)):
+    return ModelTag.objects.filter(organization=ctx.organization).order_by("name")
 
 @router.post("/tags", response_model=TagOut)
-def create_tag(data: TagIn):
+def create_tag(data: TagIn, ctx: RequestContext = Depends(get_request_context)):
     if ModelTag.objects.filter(name=data.name).exists():
         raise HTTPException(status_code=400, detail="Tag already exists")
 
-    tag = ModelTag.objects.create(name=data.name, description=data.description)
+    tag = ModelTag.objects.create(
+        organization=ctx.organization, name=data.name, description=data.description
+    )
     return tag

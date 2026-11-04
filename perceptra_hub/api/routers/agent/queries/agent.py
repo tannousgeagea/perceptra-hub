@@ -337,6 +337,7 @@ async def report_job_progress(
     @sync_to_async
     def update():
         AgentManager.update_job_progress(
+            agent=agent,
             job_id=request.job_id,
             status=request.status,
             progress=request.progress,
@@ -359,6 +360,7 @@ async def complete_job(
     @sync_to_async
     def complete():
         AgentManager.complete_job(
+            agent=agent,
             job_id=request.job_id,
             success=request.success,
             artifacts=request.artifacts,
