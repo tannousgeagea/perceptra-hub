@@ -3,7 +3,8 @@
 import time
 import uuid
 from fastapi import Header
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from api.dependencies import RequestContext, get_request_context
 from ml_models.models import ModelVersion
 from projects.models import VersionImage, ImageMode
 from inferences.models import PredictionImageResult, PredictionOverlay
@@ -19,12 +20,13 @@ router = APIRouter()
 def validate_model(
     model_version_id: int,
     x_request_id: Annotated[Optional[str], Header()] = None,
+    ctx: RequestContext = Depends(get_request_context),
     ):
     task_id = x_request_id if x_request_id else str(uuid.uuid4())
     track_progress(task_id=task_id, percentage=0, message="Initiating Validation ...", status="pending")
     try:
         try:
-            model_version = ModelVersion.objects.get(id=model_version_id)
+            model_version = ModelVersion.objects.get(id=model_version_id, model__organization=ctx.organization)
         except ModelVersion.DoesNotExist:
             track_progress(task_id=task_id, percentage=0, message=f"Failed: Model Version not Found", status="failed")
             raise HTTPException(status_code=404, detail="Model version not found")
@@ -84,6 +86,8 @@ def validate_model(
             "new_results_created": created_results
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         track_progress(task_id=task_id, message=f"Internal Server Error: {e}", status="failed")
         raise HTTPException(

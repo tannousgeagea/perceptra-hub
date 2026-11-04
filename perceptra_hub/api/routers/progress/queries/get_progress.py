@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse
 from fastapi import FastAPI, Depends, APIRouter, Request, Header, Response
 from typing import Callable, Union, Any, Dict, AnyStr, Optional, List
 from common_utils.progress.core import get_progress
+from users.auth import get_current_user
 
 class TimedRoute(APIRoute):
     def get_route_handler(self) -> Callable:
@@ -43,7 +44,7 @@ router = APIRouter(
 @router.api_route(
     "/progress/{task_id}", methods=["GET"], tags=["Progress"]
 )
-def get_task_progress(task_id: str):
+def get_task_progress(task_id: str, _user=Depends(get_current_user)):
     progress = get_progress(task_id)
     if not progress:
         return {

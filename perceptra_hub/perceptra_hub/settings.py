@@ -221,9 +221,12 @@ MEDIA_SERVE_ROOTS = [
 # storage that cannot mint short-lived URLs, and local files. Rotating it
 # invalidates every outstanding link. Defaults to SECRET_KEY.
 MEDIA_URL_SIGNING_KEY = env('MEDIA_URL_SIGNING_KEY', '') or SECRET_KEY
-# Require that signature on /api/v1/media/files/ (local storage). Off by
-# default so URLs stored before signing existed keep working.
-MEDIA_REQUIRE_SIGNED_URLS = env('MEDIA_REQUIRE_SIGNED_URLS', 'false').lower() in ('1', 'true', 'yes')
+# Require that signature on /api/v1/media/files/ (local storage). On by
+# default: without it anyone who knows a file's path can download it. The app
+# signs every URL it issues (storage.services.get_local_media_url), and those
+# expire anyway; set MEDIA_REQUIRE_SIGNED_URLS=false only to honour old,
+# unsigned links during a migration.
+MEDIA_REQUIRE_SIGNED_URLS = env('MEDIA_REQUIRE_SIGNED_URLS', 'true').lower() in ('1', 'true', 'yes')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field

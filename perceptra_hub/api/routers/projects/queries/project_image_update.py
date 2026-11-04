@@ -11,7 +11,7 @@ import uuid
 from django.db.models import F
 from api.dependencies import get_project_context, ProjectContext
 from api.routers.projects.schemas import ProjectImageStatusUpdate, SplitDatasetRequest, SplitDatasetResponse
-from projects.models import ProjectImage
+from projects.models import ImageReview, ProjectImage
 from annotations.models import (
     Annotation,
 )
@@ -21,80 +21,101 @@ router = APIRouter(prefix="/projects")
 
 
 
-@sync_to_async
-def review_image(project, project_image_id, approved, feedback, user):
-    from django.utils import timezone
-    
-    try:
-        project_image = ProjectImage.objects.get(
-            id=project_image_id,
-            project=project,
-            is_active=True
+REJECT_FIELDS = [
+    'reviewed', 'finalized', 'status', 'reviewed_by', 'reviewed_at', 'feedback_provided',
+    'metadata', 'marked_as_null', 'annotated', 'updated_at',
+]
+
+
+def _apply_review(project_image, approved: bool, feedback: Optional[str], user, now) -> None:
+    """
+    One review decision on one image (caller holds the transaction).
+
+    Approve: the image is reviewed, its annotations are marked reviewed, and
+    an open rejection note is closed. Reject: the image goes back to its job's
+    annotator as 'rejected' with the reason; annotations are left unreviewed.
+    Every decision is stored as an ImageReview.
+    """
+    if approved:
+        project_image.reviewed = True
+        project_image.status = 'reviewed'
+        project_image.reviewed_by = user
+        project_image.reviewed_at = now
+        project_image.metadata = project_image.metadata or {}
+        project_image.metadata.setdefault('review_history', []).append({
+            'approved': True,
+            'reviewed_by': user.username,
+            'reviewed_at': now.isoformat(),
+            'feedback': feedback,
+        })
+        project_image.resolve_rejection(user=user, now=now, how='approved')
+        update_fields = ['reviewed', 'status', 'reviewed_by', 'reviewed_at', 'metadata', 'updated_at']
+        if feedback:
+            project_image.feedback_provided = True
+            update_fields.append('feedback_provided')
+        project_image.save(update_fields=update_fields)
+        Annotation.objects.filter(project_image=project_image, is_active=True).update(
+            reviewed=True, reviewed_by=user, reviewed_at=now
         )
-    except ProjectImage.DoesNotExist:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project image not found"
-        )
-    
-    # Prevent duplicate review of same state
-    if project_image.reviewed and project_image.status == 'reviewed':
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Image already {project_image.status}"
-        )
-    
-    # Update review fields
-    project_image.reviewed = True
-    project_image.status = 'approved' if approved else 'rejected'
-    project_image.reviewed_by = user
-    project_image.reviewed_at = timezone.now()
-    
-    update_fields = ['reviewed', 'status', 'reviewed_by', 'reviewed_at', 'updated_at']
-    
-    # Track review history in metadata
-    if not project_image.metadata:
-        project_image.metadata = {}
-    if 'review_history' not in project_image.metadata:
-        project_image.metadata['review_history'] = []
-    
-    project_image.metadata['review_history'].append({
-        'approved': approved,
-        'reviewed_by': user.username,
-        'reviewed_at': timezone.now().isoformat(),
-        'feedback': feedback
-    })
-    
-    update_fields.append('metadata')
-    
-    if feedback:
-        project_image.feedback_provided = True
-        update_fields.append('feedback_provided')
-    
-    # IMPORTANT: Save with update_fields to trigger signal
-    project_image.save(update_fields=update_fields)
-    
-    # Then increment counters using F() at database level
+    else:
+        project_image.reject(user=user, reason=feedback, now=now)
+        project_image.save(update_fields=REJECT_FIELDS)
+
     ProjectImage.objects.filter(id=project_image.id).update(
         review_count=F('review_count') + 1,
         last_review_version=F('last_review_version') + 1
     )
-    
-    # Refresh to get updated values
+    ImageReview.record(project_image, reviewer=user, approved=approved, reason=feedback or '')
+
+
+def _check_review_request(project_ctx: ProjectContext, approved: bool, feedback: Optional[str]) -> Optional[str]:
+    """Rejecting needs review permission and a reason; returns the cleaned reason."""
+    feedback = (feedback or '').strip() or None
+    if not approved:
+        project_ctx.require_review_permission()
+        if not feedback:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A reason is required to send an image back",
+            )
+    return feedback
+
+
+@sync_to_async
+def review_image(project, project_image_id, approved, feedback, user):
+    from django.db import transaction
+    from django.utils import timezone
+
+    with transaction.atomic():
+        try:
+            project_image = ProjectImage.objects.select_for_update().get(
+                id=project_image_id,
+                project=project,
+                is_active=True
+            )
+        except ProjectImage.DoesNotExist:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project image not found"
+            )
+
+        if project_image.finalized:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Image is already in a dataset"
+            )
+        # Approving twice is a no-op error; rejecting a reviewed image is the point.
+        if approved and project_image.reviewed and project_image.status == 'reviewed':
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Image already {project_image.status}"
+            )
+
+        _apply_review(project_image, approved, feedback, user, timezone.now())
+
     project_image.refresh_from_db()
-        
-    # Update annotations
-    Annotation.objects.filter(
-        project_image=project_image,
-        is_active=True
-    ).update(
-        reviewed=True,
-        reviewed_by=user,
-        reviewed_at=timezone.now()
-    )
-    
     return {
-        "message": f"Image {'approved' if approved else 'rejected'} successfully",
+        "message": "Image approved" if approved else "Image sent back to the annotator",
         "project_image_id": str(project_image.id),
         "status": project_image.status,
         "reviewed": project_image.reviewed,
@@ -116,89 +137,12 @@ async def review_project_image(
     feedback: Optional[str] = Body(None, description="Review feedback"),
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
-    """Review and approve/reject project image annotations."""
-    
-    @sync_to_async
-    def review_image(project, project_image_id, approved, feedback, user):
-        from django.utils import timezone
-        
-        try:
-            project_image = ProjectImage.objects.get(
-                id=project_image_id,
-                project=project,
-                is_active=True
-            )
-        except ProjectImage.DoesNotExist:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project image not found"
-            )
-        
-        # Prevent duplicate review of same state
-        if project_image.reviewed and project_image.status == 'reviewed':
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Image already {project_image.status}"
-            )
-        
-        # Update review fields
-        project_image.reviewed = True
-        project_image.status = 'approved' if approved else 'rejected'
-        project_image.reviewed_by = user
-        project_image.reviewed_at = timezone.now()
-        
-        update_fields = ['reviewed', 'status', 'reviewed_by', 'reviewed_at', 'updated_at']
-        
-        # Track review history in metadata
-        if not project_image.metadata:
-            project_image.metadata = {}
-        if 'review_history' not in project_image.metadata:
-            project_image.metadata['review_history'] = []
-        
-        project_image.metadata['review_history'].append({
-            'approved': approved,
-            'reviewed_by': user.username,
-            'reviewed_at': timezone.now().isoformat(),
-            'feedback': feedback
-        })
-        
-        update_fields.append('metadata')
-        
-        if feedback:
-            project_image.feedback_provided = True
-            update_fields.append('feedback_provided')
-        
-        # IMPORTANT: Save with update_fields to trigger signal
-        project_image.save(update_fields=update_fields)
-        
-        # Then increment counters using F() at database level
-        ProjectImage.objects.filter(id=project_image.id).update(
-            review_count=F('review_count') + 1,
-            last_review_version=F('last_review_version') + 1
-        )
-        
-        # Refresh to get updated values
-        project_image.refresh_from_db()
-            
-        # Update annotations
-        Annotation.objects.filter(
-            project_image=project_image,
-            is_active=True
-        ).update(
-            reviewed=True,
-            reviewed_by=user,
-            reviewed_at=timezone.now()
-        )
-        
-        return {
-            "message": f"Image {'approved' if approved else 'rejected'} successfully",
-            "project_image_id": str(project_image.id),
-            "status": project_image.status,
-            "reviewed": project_image.reviewed,
-            "reviewed_by": project_image.reviewed_by.username if project_image.reviewed_by else None,
-            "reviewed_at": project_image.reviewed_at.isoformat() if project_image.reviewed_at else None
-        }
-    
+    """
+    Approve an image, or send it back to its annotator (approved=false) with
+    the reason in `feedback`. Sending back needs review permission.
+    """
+    feedback = _check_review_request(project_ctx, approved, feedback)
+
     return await review_image(
         project_ctx.project,
         project_image_id,
@@ -207,6 +151,46 @@ async def review_project_image(
         project_ctx.user
     )
     
+
+@router.post(
+    "/{project_id}/images/{project_image_id}/resubmit",
+    summary="Resubmit a Rejected Image",
+    description="The annotator fixed an image that was sent back: return it to review"
+)
+async def resubmit_project_image(
+    project_id: UUID,
+    project_image_id: int,
+    project_ctx: ProjectContext = Depends(get_project_context)
+):
+    project_ctx.require_annotate_permission()
+
+    @sync_to_async
+    def resubmit(project, user):
+        from django.db import transaction
+
+        with transaction.atomic():
+            try:
+                project_image = ProjectImage.objects.select_for_update().get(
+                    id=project_image_id, project=project, is_active=True
+                )
+            except ProjectImage.DoesNotExist:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project image not found")
+            if project_image.status != 'rejected':
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only an image that was sent back can be resubmitted",
+                )
+            project_image.resubmit(user=user)
+            project_image.save(update_fields=['annotated', 'status', 'metadata', 'updated_at'])
+        return project_image
+
+    project_image = await resubmit(project_ctx.project, project_ctx.user)
+    return {
+        "message": "Image sent back for review",
+        "project_image_id": str(project_image.id),
+        "status": project_image.status,
+    }
+
 
 # ============= Bulk Project Image Review (Signal-Safe) =============
 @router.patch(
@@ -221,11 +205,12 @@ async def bulk_review_project_images(
     feedback: Optional[str] = Body(None, description="Optional review feedback"),
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
+    feedback = _check_review_request(project_ctx, approved, feedback)
+
     @sync_to_async
     def bulk_review(project, image_ids, approved, feedback, user):
         from django.db import transaction
         from django.utils import timezone
-        from django.db.models import F
 
         if not image_ids:
             raise HTTPException(
@@ -251,70 +236,21 @@ async def bulk_review_project_images(
             failed = 0
 
             now = timezone.now()
-            status_value = "approved" if approved else "rejected"
+            status_value = "reviewed" if approved else "rejected"
 
             for img in images:
+                # Nothing to do: already in that state, or already in a dataset.
+                if img.finalized or (approved and img.reviewed) or (not approved and img.status == "rejected"):
+                    skipped += 1
+                    continue
                 try:
-                    # Skip already reviewed images
-                    if img.reviewed and img.status in ["approved", "rejected"]:
-                        skipped += 1
-                        continue
-
-                    img.reviewed = True
-                    img.status = status_value
-                    img.reviewed_by = user
-                    img.reviewed_at = now
-
-                    if not img.metadata:
-                        img.metadata = {}
-
-                    if "review_history" not in img.metadata:
-                        img.metadata["review_history"] = []
-
-                    img.metadata["review_history"].append({
-                        "approved": approved,
-                        "reviewed_by": user.username,
-                        "reviewed_at": now.isoformat(),
-                        "feedback": feedback
-                    })
-
-                    update_fields = [
-                        "reviewed",
-                        "status",
-                        "reviewed_by",
-                        "reviewed_at",
-                        "metadata",
-                        "updated_at",
-                    ]
-
-                    if feedback:
-                        img.feedback_provided = True
-                        update_fields.append("feedback_provided")
-
-                    # 🔥 THIS TRIGGERS post_save SIGNAL
-                    img.save(update_fields=update_fields)
-
-                    # Safe counter increment at DB level
-                    ProjectImage.objects.filter(id=img.id).update(
-                        review_count=F("review_count") + 1,
-                        last_review_version=F("last_review_version") + 1
-                    )
-
+                    # One savepoint per image, so a failure does not poison the batch.
+                    with transaction.atomic():
+                        _apply_review(img, approved, feedback, user, now)
                     processed += 1
-
                 except Exception:
+                    logger.exception("Bulk review failed for project image %s", img.id)
                     failed += 1
-
-            # 🔥 Bulk update annotations once
-            if processed > 0:
-                Annotation.objects.filter(
-                    project_image_id__in=image_ids,
-                    is_active=True
-                ).update(
-                    reviewed=True,
-                    reviewed_by=user,
-                    reviewed_at=now
-                )
 
             return {
                 "message": f"Bulk review completed",

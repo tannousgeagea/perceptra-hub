@@ -31,11 +31,12 @@ def get_dowload_url(image:Image, expiration:int=3600):
 
 
 # The job view's tabs, in display order. 'dataset' = completed (moved to a dataset).
-JOB_IMAGE_TABS = ("unannotated", "annotated", "reviewed", "dataset")
+JOB_IMAGE_TABS = ("unannotated", "rejected", "annotated", "reviewed", "dataset")
 
 
 class JobImageCounts(BaseModel):
     unannotated: int = 0
+    rejected: int = 0      # sent back to the annotator ("needs fixes")
     annotated: int = 0
     reviewed: int = 0
     dataset: int = 0
@@ -173,6 +174,7 @@ async def list_job_images(
             "annotated": counts.get("annotated", 0),
             "unannotated": counts.get("unannotated", 0),
             "reviewed": counts.get("reviewed", 0),
+            "rejected": counts.get("rejected", 0),
             "dataset": counts.get("dataset", 0),
             "marked_null": counts.get("marked_null", 0),
             "image_ids": list(map(str, image_ids)),

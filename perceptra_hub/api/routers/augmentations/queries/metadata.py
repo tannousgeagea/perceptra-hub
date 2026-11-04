@@ -1,6 +1,7 @@
 import time
 from fastapi.routing import APIRoute
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from users.auth import get_current_user
 from fastapi import Request, Response
 from augmentations.models import Augmentation, AugmentationParameterAssignment
 from pydantic import BaseModel
@@ -51,7 +52,7 @@ router = APIRouter(
 @router.api_route(
     "/augmentations", methods=["GET"], tags=["Augmentations"], response_model=List[AugmentationResponse]
     )
-def get_active_augmentations():
+def get_active_augmentations(_user=Depends(get_current_user)):
     """
     Retrieve all active augmentations with their associated parameters.
     """

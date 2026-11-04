@@ -99,20 +99,41 @@ async def split_job_into_slices(
                 detail=f"Number of user assignments ({len(data.user_assignments)}) must match number of slices ({data.number_of_slices})"
             )
         
-        # Validate all user IDs exist
-        user_ids = [uid for uid in data.user_assignments if uid]
+        # Assignees must be active members of this project's organization.
+        user_ids = [str(uid) for uid in data.user_assignments if uid]
         if user_ids:
-            existing_users = User.objects.filter(id__in=user_ids).values_list('id', flat=True)
-            missing_users = set(user_ids) - set(str(uid) for uid in existing_users)
+            from memberships.models import OrganizationMembership
+
+            if not all(uid.isdigit() for uid in user_ids):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user id")
+            members = set(
+                str(uid) for uid in OrganizationMembership.objects.filter(
+                    organization=job.project.organization,
+                    status='active',
+                    user_id__in=user_ids,
+                ).values_list('user_id', flat=True)
+            )
+            missing_users = sorted(set(user_ids) - members)
             if missing_users:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Users not found: {', '.join(missing_users)}"
                 )
-        
-        # Calculate images per slice
-        images_per_slice = total_images // data.number_of_slices
-        remainder = total_images % data.number_of_slices
+
+        # Slice sizes: given (e.g. balanced by pace) or equal.
+        if data.slice_sizes is not None:
+            sizes = list(data.slice_sizes)
+            if len(sizes) != data.number_of_slices or any(s < 1 for s in sizes) or sum(sizes) != total_images:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"slice_sizes must have {data.number_of_slices} entries, each at least 1, "
+                        f"summing to the job's {total_images} images"
+                    ),
+                )
+        else:
+            base, remainder = divmod(total_images, data.number_of_slices)
+            sizes = [base + (1 if i < remainder else 0) for i in range(data.number_of_slices)]
         
         created_slices = []
         
@@ -120,8 +141,7 @@ async def split_job_into_slices(
             slice_start = 0
             
             for i in range(data.number_of_slices):
-                # Calculate slice size (distribute remainder across first slices)
-                slice_image_count = images_per_slice + (1 if i < remainder else 0)
+                slice_image_count = sizes[i]
                 slice_images = job_images[slice_start:slice_start + slice_image_count]
                 slice_start += slice_image_count
                 

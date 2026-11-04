@@ -1,7 +1,7 @@
 """
 FastAPI routes for OAuth authentication (Microsoft & Google).
 """
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from asgiref.sync import sync_to_async
 import logging
 from typing import Optional
@@ -20,6 +20,7 @@ from common_utils.auth.oauth import (
     create_or_update_oauth_user,
 )
 from common_utils.auth.utils import create_tokens_for_user
+from users.auth import get_current_user
 from organizations.models import Organization
 from authentication.models import SocialAccount
 from memberships.models import OrganizationMembership
@@ -319,18 +320,8 @@ def get_user_social_accounts(user):
     summary="Get Linked OAuth Accounts",
     description="Get all OAuth accounts linked to current user"
 )
-async def get_linked_accounts(user = None):  # TODO: Add Depends(get_current_user) when ready
-    """
-    Get user's linked OAuth accounts.
-    
-    TODO: Add authentication dependency
-    """
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Authentication required - will be implemented after basic OAuth flow is working"
-        )
-    
+async def get_linked_accounts(user=Depends(get_current_user)):
+    """Get the signed-in user's linked OAuth accounts."""
     accounts = await get_user_social_accounts(user)
     
     return {
@@ -380,62 +371,10 @@ def revoke_social_account(user, provider: str):
     summary="Unlink OAuth Account",
     description="Remove OAuth provider link from user account"
 )
-async def unlink_oauth_account(provider: str, user = None):  # TODO: Add Depends(get_current_user)
-    """
-    Unlink OAuth account from user.
-    
-    TODO: Add authentication dependency
-    """
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Authentication required - will be implemented after basic OAuth flow is working"
-        )
-    
+async def unlink_oauth_account(provider: str, user=Depends(get_current_user)):
+    """Unlink one of the signed-in user's OAuth accounts."""
     await revoke_social_account(user, provider.lower())
     
     return MessageResponse(
         message=f"{provider.title()} account unlinked successfully"
     )
-
-
-# ============= Development/Testing Endpoints =============
-
-@router.get(
-    "/debug/callback",
-    summary="Debug OAuth Callback (Dev Only)",
-    description="View all parameters received in callback"
-)
-async def debug_callback(request: Request):
-    """Debug endpoint to see what parameters Microsoft is sending."""
-    return {
-        "method": request.method,
-        "url": str(request.url),
-        "query_params": dict(request.query_params),
-        "headers": {
-            "referer": request.headers.get("referer"),
-            "user-agent": request.headers.get("user-agent"),
-        },
-        "message": "This is what the callback received"
-    }
-
-
-@router.get(
-    "/test-state",
-    summary="Test State Generation (Dev Only)",
-    description="Generate and verify state token for testing"
-)
-async def test_state_generation():
-    """Test state token generation and verification."""
-    state = OAuthStateManager.generate_state({"test": "data"})
-    is_valid = OAuthStateManager.verify_state(state)
-    
-    # Generate a test authorization URL
-    test_url = MicrosoftOAuth.get_authorization_url(state)
-    
-    return {
-        "state": state,
-        "is_valid": is_valid,
-        "test_authorization_url": test_url,
-        "message": "State generated successfully. Check if 'state' appears in the test URL."
-    }
