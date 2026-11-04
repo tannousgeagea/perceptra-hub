@@ -60,7 +60,15 @@ class JobSplitRequest(BaseModel):
         ...,
         description="List of user IDs for each slice (null for unassigned)"
     )
-    
+    slice_sizes: Optional[List[int]] = Field(
+        None,
+        description=(
+            "Images per slice, e.g. sized by each assignee's pace. Must have one "
+            "entry per slice, each at least 1, summing to the job's image count. "
+            "Omitted: equal slices."
+        ),
+    )
+
     class Config:
         json_schema_extra = {
             "example": {
