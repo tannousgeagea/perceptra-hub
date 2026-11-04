@@ -16,11 +16,15 @@ from fastapi.routing import APIRoute, APIRouter
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime, date, timedelta
 from asgiref.sync import sync_to_async
+from django.utils import timezone
 django.setup()
 
 # Import Django models after setup
 from jobs.models import Job, JobImage
 from projects.models import ProjectImage
+from fastapi import Depends
+from api.dependencies import RequestContext, require_organization_admin
+from api.routers.team_analytics.queries.team_analytics import org_jobs, org_roles
 User = get_user_model()
 
 # Pydantic models for request/response
@@ -92,7 +96,7 @@ router = APIRouter(
 def get_date_range(timeframe: TimeFrame, base_date: datetime = None) -> tuple[datetime, datetime]:
     """Generate date range based on timeframe"""
     if base_date is None:
-        base_date = datetime.now()
+        base_date = timezone.now()
     
     if timeframe == TimeFrame.day:
         start_date = base_date - timedelta(days=6)
@@ -110,36 +114,36 @@ def get_user_display_name(user):
         return f"{user.first_name} {user.last_name}"
     return user.username
 
-def get_user_role(user):
-    """Get user role"""
-    if hasattr(user, 'role') and user.role:
-        return user.role
-    elif hasattr(user, 'profile') and hasattr(user.profile, 'role'):
-        return user.profile.role
-    else:
-        return "Annotator"
+def parse_user_id(user_id: str) -> int:
+    if not str(user_id).isdigit():
+        raise HTTPException(status_code=400, detail="Invalid userId")
+    return int(user_id)
 
 @sync_to_async
-def get_user_image_analytics_data_sync(filters: ImageAnalyticsFilters) -> List[UserImageAnalytics]:
-    """Fetch image-level analytics data using Django ORM (sync version)"""
+def get_user_image_analytics_data_sync(organization, filters: ImageAnalyticsFilters) -> List[UserImageAnalytics]:
+    """Fetch one organization's image-level analytics using Django ORM (sync version)"""
     start_date, end_date = get_date_range(filters.timeFrame)
-    
-    # Base queryset for JobImages within date range
+    roles = org_roles(organization)
+
+    # Base queryset: this organization's job images within the date range
     job_images_queryset = JobImage.objects.filter(
-        project_image__updated_at__gte=start_date,  # Use updated_at
+        job__in=org_jobs(organization),
+        is_active=True,
+        project_image__updated_at__gte=start_date,
         project_image__updated_at__lte=end_date,
-        job__assignee__isnull=False
-    ).select_related('job', 'job__assignee', 'project_image')
-    
+    )
+
     # Apply filters
     if filters.role:
-        job_images_queryset = job_images_queryset.filter(job__assignee__role=filters.role)
-    
+        job_images_queryset = job_images_queryset.filter(
+            job__assignee_id__in=[uid for uid, name in roles.items() if name == filters.role]
+        )
+
     if filters.userId:
-        job_images_queryset = job_images_queryset.filter(job__assignee_id=filters.userId)
-    
+        job_images_queryset = job_images_queryset.filter(job__assignee_id=parse_user_id(filters.userId))
+
     if filters.projectId:
-        job_images_queryset = job_images_queryset.filter(job__project_id=filters.projectId)
+        job_images_queryset = job_images_queryset.filter(job__project__project_id=filters.projectId)
     
     if filters.status:
         job_images_queryset = job_images_queryset.filter(project_image__status=filters.status)
@@ -170,8 +174,7 @@ def get_user_image_analytics_data_sync(filters: ImageAnalyticsFilters) -> List[U
     job_stats = {}
     if daily_image_activity:
         user_job_stats = list(
-            Job.objects.filter(
-                assignee__isnull=False,
+            org_jobs(organization).filter(
                 created_at__gte=start_date,
                 created_at__lte=end_date
             )
@@ -187,15 +190,6 @@ def get_user_image_analytics_data_sync(filters: ImageAnalyticsFilters) -> List[U
                 'avg_images': float(stat['avg_images'] or 0),
                 'job_count': stat['job_count']
             }
-    
-    # Get user role information
-    user_roles = {}
-    if daily_image_activity:
-        users = list(User.objects.filter(
-            id__in=[item['job__assignee_id'] for item in daily_image_activity]
-        ))
-        for user in users:
-            user_roles[user.id] = get_user_role(user)
     
     analytics_data = []
     for item in daily_image_activity:
@@ -216,7 +210,7 @@ def get_user_image_analytics_data_sync(filters: ImageAnalyticsFilters) -> List[U
         analytics_data.append(UserImageAnalytics(
             userId=str(user_id),
             userName=user_name,
-            userRole=user_roles.get(user_id, "Annotator"),
+            userRole=roles.get(user_id, ""),
             date=item['activity_date'].strftime('%Y-%m-%d'),
             annotatedImages=item['annotated_images'],
             reviewedImages=item['reviewed_images'],
@@ -229,12 +223,12 @@ def get_user_image_analytics_data_sync(filters: ImageAnalyticsFilters) -> List[U
     
     return analytics_data
 
-async def get_user_image_analytics_data(filters: ImageAnalyticsFilters) -> List[UserImageAnalytics]:
+async def get_user_image_analytics_data(organization, filters: ImageAnalyticsFilters) -> List[UserImageAnalytics]:
     """Fetch image-level analytics data (async wrapper)"""
-    return await get_user_image_analytics_data_sync(filters)
+    return await get_user_image_analytics_data_sync(organization, filters)
 
 @sync_to_async
-def calculate_image_kpis_sync(analytics_data: List[UserImageAnalytics]) -> ImageAnalyticsKPIs:
+def calculate_image_kpis_sync(organization, analytics_data: List[UserImageAnalytics]) -> ImageAnalyticsKPIs:
     """Calculate image-level KPIs (sync version)"""
     today = datetime.now().date()
     week_ago = today - timedelta(days=7)
@@ -251,10 +245,12 @@ def calculate_image_kpis_sync(analytics_data: List[UserImageAnalytics]) -> Image
     
     # Get total images in progress (assigned but not finalized)
     total_images_in_progress = ProjectImage.objects.filter(
+        project__organization=organization,
+        project__is_deleted=False,
         job_assignments__isnull=False,
         finalized=False,
         is_active=True
-    ).count()
+    ).distinct().count()
     
     # Calculate top performer (by total images worked)
     user_totals: Dict[str, Dict[str, Any]] = {}
@@ -304,9 +300,9 @@ def calculate_image_kpis_sync(analytics_data: List[UserImageAnalytics]) -> Image
         imageCompletionRate=round(completion_rate, 2)
     )
 
-async def calculate_image_kpis(analytics_data: List[UserImageAnalytics]) -> ImageAnalyticsKPIs:
+async def calculate_image_kpis(organization, analytics_data: List[UserImageAnalytics]) -> ImageAnalyticsKPIs:
     """Calculate image-level KPIs (async wrapper)"""
-    return await calculate_image_kpis_sync(analytics_data)
+    return await calculate_image_kpis_sync(organization, analytics_data)
 
 @router.get("/analytics/images", response_model=ImageAnalyticsResponse)
 async def get_image_analytics(
@@ -314,7 +310,8 @@ async def get_image_analytics(
     role: Optional[str] = Query(None, description="Filter by user role"),
     userId: Optional[str] = Query(None, description="Filter by specific user ID"),
     projectId: Optional[str] = Query(None, description="Filter by project ID"),
-    status: Optional[str] = Query(None, description="Filter by image status")
+    status: Optional[str] = Query(None, description="Filter by image status"),
+    ctx: RequestContext = Depends(require_organization_admin()),
 ):
     """
     Get team analytics data at the image level with optional filters.
@@ -335,26 +332,30 @@ async def get_image_analytics(
         )
         
         # Get analytics data
-        analytics_data = await get_user_image_analytics_data(filters)
-        
+        analytics_data = await get_user_image_analytics_data(ctx.organization, filters)
+
         # Calculate KPIs
-        kpis = await calculate_image_kpis(analytics_data)
-        
+        kpis = await calculate_image_kpis(ctx.organization, analytics_data)
+
         return ImageAnalyticsResponse(
             data=analytics_data,
             kpis=kpis
         )
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching image analytics: {str(e)}")
 
 @sync_to_async
-def get_image_status_breakdown_sync(projectId: Optional[str] = None) -> ImageStatusBreakdown:
-    """Get breakdown of images by status (sync version)"""
-    queryset = ProjectImage.objects.filter(is_active=True)
-    
+def get_image_status_breakdown_sync(organization, projectId: Optional[str] = None) -> ImageStatusBreakdown:
+    """Get breakdown of one organization's images by status (sync version)"""
+    queryset = ProjectImage.objects.filter(
+        project__organization=organization, project__is_deleted=False, is_active=True
+    )
+
     if projectId:
-        queryset = queryset.filter(project_id=projectId)
+        queryset = queryset.filter(project__project_id=projectId)
     
     status_counts = queryset.aggregate(
         unannotated=Count('id', filter=Q(status='unannotated')),
@@ -368,7 +369,8 @@ def get_image_status_breakdown_sync(projectId: Optional[str] = None) -> ImageSta
 
 @router.get("/analytics/images/status-breakdown", response_model=ImageStatusBreakdown)
 async def get_image_status_breakdown(
-    projectId: Optional[str] = Query(None, description="Filter by project ID")
+    projectId: Optional[str] = Query(None, description="Filter by project ID (UUID)"),
+    ctx: RequestContext = Depends(require_organization_admin()),
 ):
     """
     Get breakdown of images by status.
@@ -376,24 +378,27 @@ async def get_image_status_breakdown(
     - **projectId**: Filter by project ID (optional)
     """
     try:
-        return await get_image_status_breakdown_sync(projectId)
+        return await get_image_status_breakdown_sync(ctx.organization, projectId)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching status breakdown: {str(e)}")
 
 @sync_to_async
-def get_user_image_performance_sync(userId: str, timeFrame: TimeFrame) -> Dict[str, Any]:
-    """Get detailed image performance for a specific user (sync version)"""
+def get_user_image_performance_sync(organization, userId: str, timeFrame: TimeFrame) -> Dict[str, Any]:
+    """Get detailed image performance for one member of the organization (sync version)"""
     start_date, end_date = get_date_range(timeFrame)
-    
-    # Get user
-    try:
-        user = User.objects.get(id=userId)
-    except User.DoesNotExist:
+    roles = org_roles(organization)
+
+    # Only members of this organization
+    user_id = parse_user_id(userId)
+    user = User.objects.filter(id=user_id).first() if user_id in roles else None
+    if user is None:
         raise HTTPException(status_code=404, detail="User not found")
-    
-    # Get image statistics
+
+    # Get image statistics (this organization's jobs only)
     job_images = JobImage.objects.filter(
-        job__assignee_id=userId,
+        job__in=org_jobs(organization),
+        is_active=True,
+        job__assignee_id=user_id,
         project_image__updated_at__gte=start_date,  # Use updated_at
         project_image__updated_at__lte=end_date,
     )
@@ -407,8 +412,8 @@ def get_user_image_performance_sync(userId: str, timeFrame: TimeFrame) -> Dict[s
     )
     
     # Get jobs statistics
-    jobs_stats = Job.objects.filter(
-        assignee_id=userId,
+    jobs_stats = org_jobs(organization).filter(
+        assignee_id=user_id,
         created_at__gte=start_date,
         created_at__lte=end_date
     ).aggregate(
@@ -421,7 +426,7 @@ def get_user_image_performance_sync(userId: str, timeFrame: TimeFrame) -> Dict[s
     return {
         'userId': str(user.id),
         'userName': get_user_display_name(user),
-        'userRole': get_user_role(user),
+        'userRole': roles.get(user_id, ""),
         'imageStats': stats,
         'jobStats': jobs_stats,
         'timeFrame': timeFrame,
@@ -434,7 +439,8 @@ def get_user_image_performance_sync(userId: str, timeFrame: TimeFrame) -> Dict[s
 @router.get("/analytics/images/user/{userId}")
 async def get_user_image_performance(
     userId: str,
-    timeFrame: TimeFrame = Query(TimeFrame.week, description="Time frame for analytics")
+    timeFrame: TimeFrame = Query(TimeFrame.week, description="Time frame for analytics"),
+    ctx: RequestContext = Depends(require_organization_admin()),
 ):
     """
     Get detailed image performance for a specific user.
@@ -443,7 +449,7 @@ async def get_user_image_performance(
     - **timeFrame**: Time frame for analytics
     """
     try:
-        return await get_user_image_performance_sync(userId, timeFrame)
+        return await get_user_image_performance_sync(ctx.organization, userId, timeFrame)
     except HTTPException:
         raise
     except Exception as e:

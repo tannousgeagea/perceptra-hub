@@ -16,9 +16,13 @@ from fastapi.routing import APIRoute, APIRouter
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime, date, timedelta
 from asgiref.sync import sync_to_async
+from django.utils import timezone
 
 
-from jobs.models import Job, JobImage 
+from fastapi import Depends
+from api.dependencies import RequestContext, require_organization_admin
+from jobs.models import Job, JobImage
+from memberships.models import OrganizationMembership
 User = get_user_model()
 
 # Pydantic models for request/response
@@ -88,7 +92,7 @@ router = APIRouter(
 def get_date_range(timeframe: TimeFrame, base_date: datetime = None) -> tuple[datetime, datetime]:
     """Generate date range based on timeframe"""
     if base_date is None:
-        base_date = datetime.now()
+        base_date = timezone.now()
     
     if timeframe == TimeFrame.day:
         # Last 7 days
@@ -109,41 +113,52 @@ def get_user_display_name(user):
         return f"{user.first_name} {user.last_name}"
     return user.username
 
-def get_user_role(user):
-    """Get user role - assumes you have a role field or method on User model"""
-    # Adjust this based on how roles are stored in your User model
-    if hasattr(user, 'role') and user.role:
-        return user.role
-    elif hasattr(user, 'profile') and hasattr(user.profile, 'role'):
-        return user.profile.role
-    else:
-        return "Annotator"  # Default role
+def org_roles(organization) -> Dict[int, str]:
+    """user id -> role name, for the organization's active members."""
+    return {
+        m.user_id: m.role.name
+        for m in OrganizationMembership.objects.filter(
+            organization=organization, status="active"
+        ).select_related("role")
+    }
+
+
+def org_jobs(organization):
+    """Assigned, active jobs of the organization's live projects."""
+    return Job.objects.filter(
+        project__organization=organization,
+        project__is_deleted=False,
+        is_active=True,
+        assignee__isnull=False,
+    )
 
 
 @sync_to_async
-def get_user_analytics_data(filters: AnalyticsFilters) -> List[UserAnalytics]:
-    """Fetch analytics data using Django ORM"""
+def get_user_analytics_data(organization, filters: AnalyticsFilters) -> List[UserAnalytics]:
+    """Fetch analytics data for one organization using Django ORM"""
     start_date, end_date = get_date_range(filters.timeFrame)
-    
-    # Base queryset for jobs within date range
-    jobs_queryset = Job.objects.filter(
+    roles = org_roles(organization)
+
+    # Base queryset: this organization's jobs within the date range
+    jobs_queryset = org_jobs(organization).filter(
         updated_at__gte=start_date,
         updated_at__lte=end_date,
-        assignee__isnull=False  # Only jobs with assignees
     )
-    
-    # ly role filter if provided
+
+    # Role filter: members holding that org role
     if filters.role:
-        # Adjust this filter based on how roles are stored in your User model
-        jobs_queryset = jobs_queryset.filter(assignee__role=filters.role)
-    
-    # ly user filter if provided
+        jobs_queryset = jobs_queryset.filter(
+            assignee_id__in=[uid for uid, name in roles.items() if name == filters.role]
+        )
+
     if filters.userId:
-        jobs_queryset = jobs_queryset.filter(assignee_id=filters.userId)
-    
-    # Apply project filter if provided
+        if not filters.userId.isdigit():
+            raise HTTPException(status_code=400, detail="Invalid userId")
+        jobs_queryset = jobs_queryset.filter(assignee_id=int(filters.userId))
+
+    # Project filter: the project's public UUID
     if filters.projectId:
-        jobs_queryset = jobs_queryset.filter(project_id=filters.projectId)
+        jobs_queryset = jobs_queryset.filter(project__project_id=filters.projectId)
     
     # Get daily activity data grouped by user and date
     daily_activity = (
@@ -166,9 +181,9 @@ def get_user_analytics_data(filters: AnalyticsFilters) -> List[UserAnalytics]:
         job_images = (
             JobImage.objects
             .filter(
+                job__in=jobs_queryset,
                 created_at__gte=start_date,
                 created_at__lte=end_date,
-                job__assignee__isnull=False
             )
             .annotate(activity_date=TruncDate('created_at'))
             .values('job__assignee_id', 'activity_date')
@@ -178,15 +193,6 @@ def get_user_analytics_data(filters: AnalyticsFilters) -> List[UserAnalytics]:
         for item in job_images:
             key = (item['job__assignee_id'], item['activity_date'])
             annotation_data[key] = item['annotated_count']
-    
-    # Get user role information
-    user_roles = {}
-    if daily_activity:
-        users = User.objects.filter(
-            id__in=[item['assignee_id'] for item in daily_activity]
-        )
-        for user in users:
-            user_roles[user.id] = get_user_role(user)
     
     analytics_data = []
     for item in daily_activity:
@@ -218,7 +224,7 @@ def get_user_analytics_data(filters: AnalyticsFilters) -> List[UserAnalytics]:
         analytics_data.append(UserAnalytics(
             userId=str(user_id),
             userName=user_name,
-            userRole=user_roles.get(user_id, "Annotator"),
+            userRole=roles.get(user_id, ""),
             date=activity_date.strftime('%Y-%m-%d'),
             annotatedCount=annotated_count,
             reviewedCount=item['reviewed_count'],
@@ -288,7 +294,8 @@ async def get_team_analytics(
     timeFrame: TimeFrame = Query(..., description="Time frame for analytics"),
     role: Optional[str] = Query(None, description="Filter by user role"),
     userId: Optional[str] = Query(None, description="Filter by specific user ID"),
-    projectId: Optional[str] = Query(None, description="Filter by project ID")
+    projectId: Optional[str] = Query(None, description="Filter by project ID (UUID)"),
+    ctx: RequestContext = Depends(require_organization_admin()),
 ):
     """
     Get team analytics data with optional filters.
@@ -307,7 +314,7 @@ async def get_team_analytics(
         )
         
         # Get analytics data
-        analytics_data = await get_user_analytics_data(filters)
+        analytics_data = await get_user_analytics_data(ctx.organization, filters)
         
         # Calculate KPIs
         kpis = await calculate_kpis(analytics_data)
@@ -316,87 +323,67 @@ async def get_team_analytics(
             data=analytics_data,
             kpis=kpis
         )
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching analytics: {str(e)}")
 
 @sync_to_async
-def get_analytics_users_sync():
-    """Get list of users for filtering (sync version)"""
-    # Get users who have been assigned jobs
-    users = list(User.objects.filter(
-        assigned_jobs__isnull=False
-    ).distinct().order_by('first_name', 'last_name', 'username'))
-    
-    user_list = []
-    for user in users:
-        user_list.append(UserInfo(
-            id=str(user.id),
-            name=get_user_display_name(user),
-            role=get_user_role(user)
-        ))
-    
-    return user_list
+def get_analytics_users_sync(organization):
+    """Members of the organization who have been assigned jobs there"""
+    roles = org_roles(organization)
+    users = User.objects.filter(
+        id__in=org_jobs(organization).filter(assignee_id__in=roles.keys()).values("assignee_id")
+    ).order_by('first_name', 'last_name', 'username')
+    return [
+        UserInfo(id=str(user.id), name=get_user_display_name(user), role=roles.get(user.id, ""))
+        for user in users
+    ]
 
 @router.get("/analytics/users", response_model=List[UserInfo])
-async def get_analytics_users():
+async def get_analytics_users(ctx: RequestContext = Depends(require_organization_admin())):
     """Get list of users for filtering"""
     try:
-        return await get_analytics_users_sync()
+        return await get_analytics_users_sync(ctx.organization)
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching users: {str(e)}")
 
 
 @sync_to_async
-def get_analytics_roles_sync():
-    """Get list of available roles for filtering (sync version)"""
-    # Get distinct roles from users who have been assigned jobs
-    users = list(User.objects.filter(
-        assigned_jobs__isnull=False
-    ).distinct())
-    
-    roles = set()
-    for user in users:
-        role = get_user_role(user)
-        if role:
-            roles.add(role)
-    
-    return sorted(list(roles))
+def get_analytics_roles_sync(organization):
+    """Org roles held by members who have been assigned jobs there"""
+    roles = org_roles(organization)
+    assignees = set(org_jobs(organization).values_list("assignee_id", flat=True).distinct())
+    return sorted({name for uid, name in roles.items() if uid in assignees})
 
 @router.get("/analytics/roles", response_model=List[str])
-async def get_analytics_roles():
+async def get_analytics_roles(ctx: RequestContext = Depends(require_organization_admin())):
     """Get list of available roles for filtering"""
     try:
-        # Get distinct roles from users who have been assigned jobs
-        return await get_analytics_roles_sync()
+        return await get_analytics_roles_sync(ctx.organization)
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching roles: {str(e)}")
 
 @sync_to_async
-def get_analytics_projects_sync():
-    """Get list of projects for filtering (sync version)"""
-    from projects.models import Project  # Update with your actual app name
-    
-    # Get projects that have jobs
-    projects = list(Project.objects.filter(
-        jobs__isnull=False
-    ).distinct().order_by('name'))
-    
-    return [
-        {
-            "id": str(project.id),
-            "name": project.name
-        }
-        for project in projects
-    ]
+def get_analytics_projects_sync(organization):
+    """The organization's live projects that have jobs"""
+    from projects.models import Project
+
+    projects = Project.objects.filter(
+        organization=organization,
+        is_deleted=False,
+        jobs__isnull=False,
+    ).distinct().order_by('name')
+    return [{"id": str(project.project_id), "name": project.name} for project in projects]
 
 @router.get("/analytics/projects", response_model=List[Dict[str, str]])
-async def get_analytics_projects():
+async def get_analytics_projects(ctx: RequestContext = Depends(require_organization_admin())):
     """Get list of projects for filtering"""
     try:
-        return await get_analytics_projects_sync()
+        return await get_analytics_projects_sync(ctx.organization)
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching projects: {str(e)}")
