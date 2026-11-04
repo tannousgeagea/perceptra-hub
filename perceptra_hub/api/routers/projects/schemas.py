@@ -221,6 +221,7 @@ class ProjectImagesResponse(BaseModel):
     
 class JobImagesResponce(ProjectImagesResponse):
     job: JobSummary
+    rejected: int = 0      # sent back to the annotator ("needs fixes")
     dataset: int = 0       # completed: moved to a dataset
     marked_null: int = 0
     

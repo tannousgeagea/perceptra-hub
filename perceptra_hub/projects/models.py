@@ -420,11 +420,15 @@ class ProjectImage(models.Model):
                 'image': _('Image must belong to the same organization as the project')
             })
         
-        # Auto-update status based on flags
+        # Auto-update status based on flags. 'rejected' (sent back to the
+        # annotator, see reject()) is not derivable from the flags, so it is
+        # kept until resubmit() or a review moves the image on.
         if self.finalized:
             self.status = 'dataset'
         elif self.reviewed:
             self.status = 'reviewed'
+        elif self.status == 'rejected':
+            pass
         elif self.annotated:
             self.status = 'annotated'
     
@@ -528,6 +532,65 @@ class ProjectImage(models.Model):
             self.metadata['null_status'] = null_status
         return restored
 
+    # ---- Review loop: send back to the annotator, resubmit ----
+    # Callers own the transaction and the final save().
+
+    def reject(self, user, reason: str, now=None) -> None:
+        """
+        Send the image back to its annotator with a reason. It leaves review
+        (reviewed=False) and shows as 'rejected' ("needs fixes") in its job
+        until resubmit() or a reviewer approves it.
+        """
+        from django.utils import timezone
+
+        now = now or timezone.now()
+        if self.marked_as_null:
+            # "It is not empty": bring back what the null flag removed.
+            self.clear_null_mark(user=user, now=now)
+        self.reviewed = False
+        self.finalized = False
+        self.status = 'rejected'
+        self.reviewed_by = user
+        self.reviewed_at = now
+        self.feedback_provided = True
+        self.metadata = self.metadata or {}
+        self.metadata['rejection'] = {
+            'reason': reason,
+            'rejected_by': user.username if user else None,
+            'rejected_by_id': user.id if user else None,
+            'rejected_at': now.isoformat(),
+            'resolved': False,
+        }
+        self.metadata.setdefault('review_history', []).append({
+            'approved': False,
+            'reviewed_by': user.username if user else None,
+            'reviewed_at': now.isoformat(),
+            'feedback': reason,
+        })
+
+    def resubmit(self, user=None, now=None) -> None:
+        """The annotator fixed a rejected image: back to review."""
+        from annotations.models import Annotation
+
+        has_annotations = Annotation.objects.filter(project_image=self, is_active=True).exists()
+        self.annotated = has_annotations
+        self.status = 'annotated' if has_annotations else 'unannotated'
+        self.resolve_rejection(user=user, now=now, how='resubmitted')
+
+    def resolve_rejection(self, user=None, now=None, how='approved') -> None:
+        """Close an open rejection note (on resubmit or approval)."""
+        from django.utils import timezone
+
+        rejection = (self.metadata or {}).get('rejection')
+        if rejection and not rejection.get('resolved'):
+            rejection.update({
+                'resolved': True,
+                'resolved_how': how,
+                'resolved_by': user.username if user else None,
+                'resolved_at': (now or timezone.now()).isoformat(),
+            })
+            self.metadata['rejection'] = rejection
+
     def note_annotation_added(self) -> list:
         """
         An annotation was drawn on this image: it is annotated, and it can no
@@ -557,6 +620,63 @@ class ProjectImage(models.Model):
             return "Annotated"
         return "Not Annotated"
    
+class ImageReview(models.Model):
+    """
+    One review decision on a project image: approved, or sent back to the
+    annotator with a reason. Kept per decision (not just the latest state) so
+    rejection rates per annotator can be computed.
+    """
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='image_reviews')
+    project_image = models.ForeignKey(ProjectImage, on_delete=models.CASCADE, related_name='reviews')
+    job = models.ForeignKey(
+        'jobs.Job', on_delete=models.SET_NULL, null=True, blank=True, related_name='image_reviews',
+        help_text=_('Job the image was in when reviewed'),
+    )
+    reviewer = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='image_reviews_given',
+    )
+    annotator = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='image_reviews_received',
+        help_text=_("The job's assignee when the review happened"),
+    )
+    approved = models.BooleanField()
+    reason = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = 'image_review'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['project', 'created_at']),
+            models.Index(fields=['annotator', 'approved']),
+        ]
+
+    def __str__(self):
+        return f"{'approved' if self.approved else 'rejected'} {self.project_image_id} by {self.reviewer_id}"
+
+    @classmethod
+    def record(cls, project_image, reviewer, approved: bool, reason: str = ''):
+        """Store one decision, attributing it to the image's current job assignee."""
+        from jobs.models import JobImage
+
+        job_image = (
+            JobImage.objects.filter(project_image=project_image, is_active=True)
+            .select_related('job')
+            .order_by('-assigned_at')
+            .first()
+        )
+        job = job_image.job if job_image else None
+        return cls.objects.create(
+            project_id=project_image.project_id,
+            project_image=project_image,
+            job=job,
+            reviewer=reviewer,
+            annotator=job.assignee if job else None,
+            approved=approved,
+            reason=reason or '',
+        )
+
+
 ##############################################################################################
 ################################ Dataset Version #############################################
 ##############################################################################################

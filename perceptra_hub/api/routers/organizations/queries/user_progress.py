@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends
 from api.dependencies import RequestContext, require_organization_admin
 from jobs.models import Job, JobImage
 from memberships.models import OrganizationMembership
+from projects.models import ImageReview
 
 router = APIRouter()
 
@@ -55,7 +56,18 @@ def _progress(organization):
             annotated=Count("id", filter=Q(project_image__status="annotated")),
             reviewed=Count("id", filter=Q(project_image__status="reviewed")),
             completed=Count("id", filter=Q(project_image__status="dataset")),
+            sent_back_open=Count("id", filter=Q(project_image__status="rejected")),
         )
+    }
+
+    # Review decisions about each member's work (they were the job assignee).
+    reviews = {
+        row["annotator_id"]: row
+        for row in ImageReview.objects.filter(
+            project__organization=organization, annotator_id__in=roles.keys()
+        )
+        .values("annotator_id")
+        .annotate(total=Count("id"), rejected=Count("id", filter=Q(approved=False)))
     }
 
     by_user = defaultdict(list)
@@ -65,7 +77,7 @@ def _progress(organization):
     data = []
     for user_id, user_jobs in by_user.items():
         user = user_jobs[0].assignee
-        totals = {"total": 0, "annotated": 0, "reviewed": 0, "completed": 0}
+        totals = {"total": 0, "annotated": 0, "reviewed": 0, "completed": 0, "sent_back_open": 0}
         assigned = []
         for job in user_jobs:
             c = counts.get(job.id, {})
@@ -80,6 +92,9 @@ def _progress(organization):
                 "completedImages": c.get("completed", 0),
             })
         role = roles.get(user_id, "")
+        review = reviews.get(user_id, {})
+        reviews_received = review.get("total", 0)
+        sent_back = review.get("rejected", 0)
         data.append({
             "userId": str(user_id),
             "userName": _display_name(user),
@@ -92,6 +107,11 @@ def _progress(organization):
             "completedImages": totals["completed"],
             "progressPercentage": round(totals["completed"] / totals["total"] * 100, 2) if totals["total"] else 0.0,
             "lastUpdated": max(j.updated_at for j in user_jobs).isoformat(),
+            # Quality: review decisions on their work, and images waiting for their fixes.
+            "reviewsReceived": reviews_received,
+            "sentBack": sent_back,
+            "rejectionRate": round(sent_back / reviews_received * 100, 1) if reviews_received else None,
+            "openSentBack": totals["sent_back_open"],
             "assignedJobs": assigned,
         })
     return data
