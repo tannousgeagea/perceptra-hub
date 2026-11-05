@@ -9,7 +9,8 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 import logging
 from asgiref.sync import sync_to_async
-from django.db.models import Count, Q
+from datetime import datetime
+from django.db.models import Count, Min, Q
 
 from api.routers.projects.schemas import JobImagesResponce
 from api.dependencies import get_project_context, ProjectContext
@@ -42,6 +43,8 @@ class JobImageCounts(BaseModel):
     dataset: int = 0
     marked_null: int = 0
     total: int = 0
+    # All jobs only: when the longest-waiting annotated image last changed (review backlog age).
+    oldest_annotated_at: Optional[datetime] = None
 
 
 def count_job_images(job_images_qs) -> dict:
@@ -59,6 +62,214 @@ def _get_job_or_404(project, job_id) -> Job:
         return Job.objects.get(id=job_id, project=project)
     except Job.DoesNotExist:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+
+# ─── "All jobs": every image of the project's active jobs, as one pseudo-job ──
+# Lets the job view and the annotator walk work across jobs (e.g. a reviewer's
+# queue: All jobs → Annotated, oldest waiting first) with the same endpoints'
+# shapes. Split parents are left out: their slices hold the same images.
+
+ALL_JOBS_ID = "all"
+
+
+def _all_jobs_queryset(project):
+    return JobImage.objects.filter(
+        job__project=project,
+        job__is_active=True,
+        is_active=True,
+        project_image__is_active=True,
+    ).exclude(job__status="sliced")
+
+
+def _all_jobs_summary(project) -> dict:
+    return {
+        "id": ALL_JOBS_ID,
+        "name": "All jobs",
+        "status": "assigned",
+        "assignee": None,
+        "created_at": project.created_at,
+        "updated_at": None,
+    }
+
+
+def _job_summary(job) -> dict:
+    return {
+        "id": str(job.id),
+        "name": job.name,
+        "status": job.status,
+        "assignee": job.assignee.username if job.assignee else None,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+
+
+def _job_images_response(queryset, job_summary, *, skip, limit, status_filter, annotated, query,
+                         include_counts, oldest_first=False):
+    """
+    One page of job images in the list response shape. `queryset` is the
+    JobImage set to list (one job, or all jobs). `oldest_first` orders by when
+    the image last changed, so the longest-waiting work comes first.
+    """
+    queryset = queryset.select_related('project_image', 'job__assignee')
+    queryset = queryset.order_by('project_image__updated_at', 'id') if oldest_first else queryset.order_by('id')
+
+    counts = count_job_images(queryset) if include_counts else {}
+
+    if query:
+        filters = parse_project_image_query(query)
+        queryset = apply_job_image_filters(queryset, filters)
+    else:
+        if status_filter:
+            queryset = queryset.filter(project_image__status=status_filter)
+        if annotated is not None:
+            queryset = queryset.filter(project_image__annotated=annotated)
+
+    total = queryset.count()
+    image_ids = list(queryset.values_list('project_image__image__id', flat=True))
+    project_image_ids = list(queryset.values_list('project_image__id', flat=True))
+
+    job_images = list(
+        queryset.select_related(
+            'project_image__image',
+            'project_image__mode'
+        ).prefetch_related(
+            'project_image__annotations__annotation_class',
+            'project_image__annotations__annotation_type'
+        )[skip:skip + limit]
+    )
+
+    return {
+        "total": total,
+        "annotated": counts.get("annotated", 0),
+        "unannotated": counts.get("unannotated", 0),
+        "reviewed": counts.get("reviewed", 0),
+        "rejected": counts.get("rejected", 0),
+        "dataset": counts.get("dataset", 0),
+        "marked_null": counts.get("marked_null", 0),
+        "image_ids": list(map(str, image_ids)),
+        "project_image_ids": list(map(str, project_image_ids)),
+        "job": job_summary,
+        "images": [
+            {
+                "id": str(ji.project_image.image.id),
+                "project_image_id": str(ji.project_image.id),
+                "image_id": str(ji.project_image.image.image_id),
+                "name": ji.project_image.image.name,
+                "original_filename": ji.project_image.image.original_filename,
+                "width": ji.project_image.image.width,
+                "height": ji.project_image.image.height,
+                "aspect_ratio": ji.project_image.image.aspect_ratio,
+                "file_format": ji.project_image.image.file_format,
+                "file_size": ji.project_image.image.file_size,
+                "file_size_mb": ji.project_image.image.file_size_mb,
+                "megapixels": round(ji.project_image.image.megapixels, 2),
+                "storage_key": ji.project_image.image.storage_key,
+                "checksum": ji.project_image.image.checksum,
+                "source_of_origin": ji.project_image.image.source_of_origin,
+                "created_at": ji.project_image.image.created_at,
+                "updated_at": ji.project_image.updated_at,
+                "uploaded_by": ji.project_image.image.uploaded_by.username,
+                "reviewed_at": ji.project_image.reviewed_at.isoformat() if ji.project_image.reviewed_at else None,
+                "reviewed_by": ji.project_image.reviewed_by.username if ji.project_image.reviewed_by else None,
+                "tags": [t.name for t in ji.project_image.image.tags.all()],
+                "storage_profile": {
+                    "id": str(ji.project_image.image.storage_profile.id),
+                    "name": ji.project_image.image.storage_profile.name,
+                    "backend": ji.project_image.image.storage_profile.backend
+                },
+                "download_url": ji.project_image.image.get_download_url(expiration=3600),
+                "status": ji.project_image.status,
+                "annotated": ji.project_image.annotated,
+                "reviewed": ji.project_image.reviewed,
+                "marked_as_null": ji.project_image.marked_as_null,
+                "priority": ji.project_image.priority,
+                "job_assignment_status": ji.project_image.job_assignment_status,
+                "added_at": ji.project_image.added_at.isoformat(),
+                "split": ji.project_image.mode.mode if ji.project_image.mode else None,
+                # The job this row comes from (who annotated it), e.g. in "All jobs".
+                "jobs": [_job_summary(ji.job)],
+                "annotations": [
+                    {
+                        "id": str(ann.id),
+                        "annotation_uid": ann.annotation_uid,
+                        "type": ann.annotation_type.name if ann.annotation_type else None,
+                        "class_id": ann.annotation_class.class_id,
+                        "class_name": ann.annotation_class.name,
+                        "color": ann.annotation_class.color,
+                        "data": ann.data,
+                        "source": ann.annotation_source,
+                        "confidence": ann.confidence,
+                        "reviewed": ann.reviewed,
+                        "is_active": ann.is_active,
+                        "created_at": ann.created_at.isoformat(),
+                        "created_by": ann.created_by.username if ann.created_by else None,
+                    }
+                    for ann in ji.project_image.annotations.filter(is_active=True).select_related(
+                        'annotation_class', 'annotation_type'
+                    )
+                ]
+            }
+            for ji in job_images
+        ]
+    }
+
+
+@router.get(
+    "/{project_id}/jobs/all/images/counts",
+    summary="All Jobs: Image Counts per Tab",
+    response_model=JobImageCounts,
+)
+async def all_jobs_image_counts(
+    project_id: UUID,
+    project_ctx: ProjectContext = Depends(get_project_context),
+):
+    """Per-status counts across every active job, plus the age of the review backlog."""
+    project_ctx.require_project_access()
+
+    @sync_to_async
+    def counts():
+        queryset = _all_jobs_queryset(project_ctx.project)
+        result = count_job_images(queryset)
+        result["oldest_annotated_at"] = queryset.filter(
+            project_image__status="annotated"
+        ).aggregate(oldest=Min("project_image__updated_at"))["oldest"]
+        return result
+
+    return await counts()
+
+
+@router.get(
+    "/{project_id}/jobs/all/images",
+    summary="All Jobs: List Images",
+    response_model=JobImagesResponce,
+)
+async def list_all_jobs_images(
+    project_id: UUID,
+    project_ctx: ProjectContext = Depends(get_project_context),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    status: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    include_counts: bool = Query(True),
+):
+    """
+    Images of every active job, as one list. The work queues (unannotated,
+    rejected, annotated) come oldest first, so what has waited longest is
+    reviewed or fixed first.
+    """
+    project_ctx.require_project_access()
+    oldest_first = (status or "") in ("unannotated", "rejected", "annotated") or (q or "").startswith("status:")
+
+    @sync_to_async
+    def build():
+        project = project_ctx.project
+        return _job_images_response(
+            _all_jobs_queryset(project), _all_jobs_summary(project),
+            skip=skip, limit=limit, status_filter=status, annotated=None, query=q,
+            include_counts=include_counts, oldest_first=oldest_first,
+        )
+
+    return await build()
 
 
 @router.get(
@@ -132,123 +343,13 @@ async def list_job_images(
 
     
     @sync_to_async
-    def get_job_images(project, job_id, skip, limit, status_filter, annotated, query):
-        job = _get_job_or_404(project, job_id)
-
-        # Get job images
-        queryset = JobImage.objects.filter(
-            job=job,
-            project_image__is_active=True
-        ).select_related('project_image').order_by('id')
-
-        counts = count_job_images(queryset) if include_counts else {}
-        
-        if query:
-            filters = parse_project_image_query(query)
-            queryset = apply_job_image_filters(queryset, filters)
-        
-        else:
-            # Apply filters on project_image
-            if status_filter:
-                queryset = queryset.filter(project_image__status=status_filter)
-            
-            if annotated is not None:
-                queryset = queryset.filter(project_image__annotated=annotated)
-        
-        total = queryset.count()
-        image_ids = list(queryset.values_list('project_image__image__id', flat=True))
-        project_image_ids = list(queryset.values_list('project_image__id', flat=True))
-        
-        job_images = list(
-            queryset.select_related(
-                'project_image__image',
-                'project_image__mode'
-            ).prefetch_related(
-                'project_image__annotations__annotation_class',
-                'project_image__annotations__annotation_type'
-            )[skip:skip + limit]
+    def get_job_images():
+        job = _get_job_or_404(project_ctx.project, job_id)
+        return _job_images_response(
+            JobImage.objects.filter(job=job, project_image__is_active=True),
+            _job_summary(job),
+            skip=skip, limit=limit, status_filter=status, annotated=annotated, query=q,
+            include_counts=include_counts,
         )
-        
-        return {
-            "total": total,
-            "annotated": counts.get("annotated", 0),
-            "unannotated": counts.get("unannotated", 0),
-            "reviewed": counts.get("reviewed", 0),
-            "rejected": counts.get("rejected", 0),
-            "dataset": counts.get("dataset", 0),
-            "marked_null": counts.get("marked_null", 0),
-            "image_ids": list(map(str, image_ids)),
-            "project_image_ids": list(map(str, project_image_ids)),
-            "job": {
-                "id": str(job.id),
-                "name": job.name,
-                "status": job.status,
-                "assignee": job.assignee.username if job.assignee else None,
-                "created_at": job.created_at,
-                "updated_at": job.updated_at,
-            },
-            "images": [
-                {
-                    "id": str(ji.project_image.image.id),
-                    "project_image_id": str(ji.project_image.id),
-                    "image_id": str(ji.project_image.image.image_id),
-                    "name": ji.project_image.image.name,
-                    "original_filename": ji.project_image.image.original_filename,
-                    "width": ji.project_image.image.width,
-                    "height": ji.project_image.image.height,
-                    "aspect_ratio": ji.project_image.image.aspect_ratio,
-                    "file_format": ji.project_image.image.file_format,
-                    "file_size": ji.project_image.image.file_size,
-                    "file_size_mb": ji.project_image.image.file_size_mb,
-                    "megapixels": round(ji.project_image.image.megapixels, 2),
-                    "storage_key": ji.project_image.image.storage_key,
-                    "checksum": ji.project_image.image.checksum,
-                    "source_of_origin": ji.project_image.image.source_of_origin,
-                    "created_at": ji.project_image.image.created_at,
-                    "updated_at": ji.project_image.updated_at,
-                    "uploaded_by": ji.project_image.image.uploaded_by.username,
-                    "reviewed_at": ji.project_image.reviewed_at.isoformat() if ji.project_image.reviewed_at else None,
-                    "reviewed_by": ji.project_image.reviewed_by.username if ji.project_image.reviewed_by else None,
-                    "tags": [t.name for t in ji.project_image.image.tags.all()],
-                    "storage_profile": {
-                        "id": str(ji.project_image.image.storage_profile.id),
-                        "name": ji.project_image.image.storage_profile.name,
-                        "backend": ji.project_image.image.storage_profile.backend
-                    },
-                    "download_url": ji.project_image.image.get_download_url(expiration=3600),
-                    "status": ji.project_image.status,
-                    "annotated": ji.project_image.annotated,
-                    "reviewed": ji.project_image.reviewed,
-                    "marked_as_null": ji.project_image.marked_as_null,
-                    "priority": ji.project_image.priority,
-                    "job_assignment_status": ji.project_image.job_assignment_status,
-                    "added_at": ji.project_image.added_at.isoformat(),
-                    "split": ji.project_image.mode.mode if ji.project_image.mode else None, 
-                    "annotations": [
-                        {
-                            "id": str(ann.id),
-                            "annotation_uid": ann.annotation_uid,
-                            "type": ann.annotation_type.name if ann.annotation_type else None,
-                            "class_id": ann.annotation_class.class_id,
-                            "class_name": ann.annotation_class.name,
-                            "color": ann.annotation_class.color,
-                            "data": ann.data,
-                            "source": ann.annotation_source,
-                            "confidence": ann.confidence,
-                            "reviewed": ann.reviewed,
-                            "is_active": ann.is_active,
-                            "created_at": ann.created_at.isoformat(),
-                            "created_by": ann.created_by.username if ann.created_by else None,
-                        }
-                        for ann in ji.project_image.annotations.filter(is_active=True).select_related(
-                            'annotation_class', 'annotation_type'
-                        )
-                    ]
-                }
-                for ji in job_images
-            ]
-        }
-    
-    return await get_job_images(
-        project_ctx.project, job_id, skip, limit, status, annotated, query=q,
-    )
+
+    return await get_job_images()
