@@ -77,15 +77,19 @@ async def assign_job_to_user(
                 detail="User not found"
             )
         
-        # Assign job
+        # Assign job (and remember who gave it to them)
+        from django.utils import timezone
+
         job.assignee = assignee
         job.updated_by = user
-        
+        job.assigned_by = user
+        job.assigned_at = timezone.now()
+
         # Update status if currently unassigned
         if job.status == 'unassigned':
             job.status = 'assigned'
-        
-        job.save(update_fields=['assignee', 'status', 'updated_at', 'updated_by'])
+
+        job.save(update_fields=['assignee', 'status', 'updated_at', 'updated_by', 'assigned_by', 'assigned_at'])
         
         return job
     
@@ -135,7 +139,9 @@ async def unassign_job(
         
         job.assignee = None
         job.status = 'unassigned'
-        job.save(update_fields=['assignee', 'status', 'updated_at'])
+        job.assigned_by = None
+        job.assigned_at = None
+        job.save(update_fields=['assignee', 'status', 'updated_at', 'assigned_by', 'assigned_at'])
         
         return job
     

@@ -31,7 +31,13 @@ class JobOut(BaseModel):
     updated_at: str
     project_id: UUID
     project_name: str
-    
+    # Images a reviewer sent back, waiting for the assignee's fixes (/jobs/me only).
+    to_fix: int = 0
+    # Who gave the job to its assignee (display name), and when (/jobs/me only).
+    assigned_by: Optional[str] = None
+    assigned_by_id: Optional[str] = None
+    assigned_at: Optional[str] = None
+
 class JobUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None

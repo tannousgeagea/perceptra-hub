@@ -35,7 +35,8 @@ async def create_job(
     project_ctx.require_project_role("owner", "admin")
     """Create a new job for project."""
     @sync_to_async
-    def create_job_record(project, data):
+    def create_job_record(project, data, user):
+        from django.utils import timezone
 
         # Get assignee if specified
         assignee = None
@@ -55,12 +56,16 @@ async def create_job(
             description=data.description,
             assignee=assignee,
             batch_id=data.batch_id,
-            status='assigned' if assignee else 'unassigned'
+            status='assigned' if assignee else 'unassigned',
+            created_by=user,
+            updated_by=user,
+            assigned_by=user if assignee else None,
+            assigned_at=timezone.now() if assignee else None,
         )
-        
+
         return job
-    
-    job = await create_job_record(project_ctx.project, data)
+
+    job = await create_job_record(project_ctx.project, data, project_ctx.user)
     
     return JobResponse(
         id=str(job.id),

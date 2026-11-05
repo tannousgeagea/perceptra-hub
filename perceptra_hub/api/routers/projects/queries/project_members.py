@@ -56,6 +56,26 @@ def _list_members(project) -> list:
     ]
 
 
+def _project_role(role_name: str) -> Role:
+    """
+    The Role row for a project role name. Any name from ProjectRole is valid;
+    its row is created on first use (annotator and reviewer are project-only
+    roles, so an organization may not have them yet). Anything else is a 400.
+    """
+    from memberships.roles import ProjectRole
+
+    name = (role_name or "").strip().lower()
+    if name not in {r.value for r in ProjectRole}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid role: {role_name}",
+        )
+    role = Role.objects.filter(name__iexact=name).first()
+    if role is None:
+        role, _ = Role.objects.get_or_create(name=name)
+    return role
+
+
 @sync_to_async
 def _add_member(user_id: int, role_name: str, project, organization, requesting_user) -> ProjectMemberOut:
     try:
@@ -75,13 +95,7 @@ def _add_member(user_id: int, role_name: str, project, organization, requesting_
             detail="User is already a member of this project",
         )
 
-    try:
-        role = Role.objects.get(name__iexact=role_name)
-    except Role.DoesNotExist:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid role: {role_name}",
-        )
+    role = _project_role(role_name)
 
     membership = ProjectMembership.objects.create(user=user, project=project, role=role)
 
@@ -120,13 +134,7 @@ def _update_member(user_id: int, role_name: str, project, requesting_user) -> Pr
             detail="User is not a member of this project",
         )
 
-    try:
-        new_role = Role.objects.get(name__iexact=role_name)
-    except Role.DoesNotExist:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid role: {role_name}",
-        )
+    new_role = _project_role(role_name)
 
     old_role = membership.role.name
     membership.role = new_role

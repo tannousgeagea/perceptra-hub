@@ -58,6 +58,16 @@ class Job(models.Model):
         on_delete=models.SET_NULL,
         related_name="updated_jobs",
     )
+    # Who gave the job to its current assignee, and when (unlike updated_by,
+    # not overwritten by later edits such as a rename).
+    assigned_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="jobs_assigned",
+    )
+    assigned_at = models.DateTimeField(null=True, blank=True)
 
     # 👇 soft delete
     is_active = models.BooleanField(default=True, db_index=True)

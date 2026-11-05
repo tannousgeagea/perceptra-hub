@@ -104,6 +104,7 @@ class JobProgress(BaseModel):
     annotated: int
     reviewed: int
     completed: int
+    rejected: int = 0      # sent back, waiting for the assignee's fixes
 
 class JobResponse(BaseModel):
     id: str

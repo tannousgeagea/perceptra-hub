@@ -13,6 +13,7 @@ import logging
 from uuid import UUID
 from asgiref.sync import sync_to_async
 from django.db.models import Count, Q
+from django.utils import timezone
 from api.dependencies import get_project_context, ProjectContext
 
 from django.contrib.auth import get_user_model
@@ -160,6 +161,8 @@ async def split_job_into_slices(
                     batch_id=job.batch_id,
                     created_by=user,
                     updated_by=user,
+                    assigned_by=user if assignee else None,
+                    assigned_at=timezone.now() if assignee else None,
                 )
                 
                 # Assign images to slice
