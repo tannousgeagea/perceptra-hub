@@ -44,6 +44,7 @@ async def list_jobs(
                     annotated=Count("images", filter=Q(images__project_image__status="annotated")),
                     reviewed=Count("images", filter=Q(images__project_image__status="reviewed")),
                     completed=Count("images", filter=Q(images__project_image__status="dataset")),
+                    rejected=Count("images", filter=Q(images__project_image__status="rejected")),
                 )
                 .order_by('-created_at')
             )
@@ -78,6 +79,7 @@ async def list_jobs(
                     annotated=j.annotated,
                     reviewed=j.reviewed,
                     completed=j.completed,
+                    rejected=j.rejected,
                 )
             )
             for j in jobs

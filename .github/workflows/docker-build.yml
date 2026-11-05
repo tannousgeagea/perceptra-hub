@@ -7,7 +7,34 @@ on:
       - completed
 
 jobs:
+  # Every data-API route must authenticate (api/tests/test_route_auth.py).
+  # Runs inside the image about to be published; Django start-up needs Redis,
+  # not a database.
+  route-auth:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Build image (not pushed)
+      run: docker build -t perceptrahub:ci .
+
+    - name: Route authentication guard
+      run: |
+        docker run --rm --network host --entrypoint python3 \
+          -w /home/appuser/src/perceptra_hub \
+          -e REDIS_HOST=localhost -e REDIS_PORT=6379 \
+          -e DATABASE_ENGINE=django.db.backends.postgresql -e DATABASE_HOST=localhost \
+          perceptrahub:ci -m unittest api.tests.test_route_auth -v
+
   build:
+    needs: route-auth
     runs-on: ubuntu-latest
 
     steps:
