@@ -61,7 +61,7 @@ async def get_project_image(
             ).prefetch_related(
                 'annotations__annotation_class',
                 'annotations__annotation_type',
-                'job_assignments__job'
+                'job_assignments__job__assignee'
             ).get(
                 image=image,
                 project=project,
@@ -123,7 +123,8 @@ async def get_project_image(
                 {
                     "id": str(ja.job.id),
                     "name": ja.job.name,
-                    "status": ja.job.status
+                    "status": ja.job.status,
+                    "assignee": ja.job.assignee.username if ja.job.assignee else None,
                 }
                 for ja in pi.job_assignments.all()
             ],
