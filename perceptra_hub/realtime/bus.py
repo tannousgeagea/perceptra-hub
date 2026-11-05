@@ -2,6 +2,8 @@
 Publishing project events and keeping presence, over Redis.
 
 Channel per project: mtx:rt:project:<project uuid>
+Channel per user:    mtx:rt:user:<user id>  (notifications; carried by every
+                     stream that user opens, project or not)
 Event (JSON): {"type", "data", "actor" (user id or null), "origin" (tab id or null), "ts"}
 """
 import json
@@ -20,6 +22,7 @@ from realtime.context import current_origin
 logger = logging.getLogger(__name__)
 
 CHANNEL_PREFIX = "mtx:rt:project:"
+USER_CHANNEL_PREFIX = "mtx:rt:user:"
 PRESENCE_PREFIX = "mtx:rt:presence:"
 # Clients heartbeat every 20s; an entry older than this is gone.
 PRESENCE_STALE_SECONDS = 50
@@ -30,6 +33,10 @@ _UNSET = object()
 
 def channel(project_uuid) -> str:
     return f"{CHANNEL_PREFIX}{project_uuid}"
+
+
+def user_channel(user_id) -> str:
+    return f"{USER_CHANNEL_PREFIX}{user_id}"
 
 
 def presence_key(project_uuid) -> str:
@@ -72,6 +79,20 @@ def publish(project_uuid, event_type: str, data: dict, *, actor: Any = None, ori
         _client().publish(channel(project_uuid), encode_event(event_type, data, actor=actor, origin=origin))
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("realtime publish failed (%s): %s", event_type, exc)
+
+
+def publish_to_user(user_id, event_type: str, data: dict, *, actor: Any = None) -> None:
+    """Publish to one user's streams, once the current transaction commits. Never raises."""
+    if user_id is None:
+        return
+
+    def send():
+        try:
+            _client().publish(user_channel(user_id), encode_event(event_type, data, actor=actor))
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.warning("realtime user publish failed (%s): %s", event_type, exc)
+
+    transaction.on_commit(send)
 
 
 def publish_on_commit(project_uuid, event_type: str, data: dict, *, actor: Any = None) -> None:
