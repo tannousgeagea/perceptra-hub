@@ -191,6 +191,12 @@ async def split_job_into_slices(
             job.status = "sliced"
             job.updated_by = user
             job.save(update_fields=["status", "updated_at"])
+
+            # Slices start as assigned/unassigned; their images may already be
+            # annotated or reviewed (bulk_create sends no signals).
+            from jobs.lifecycle import sync_jobs
+            slice_ids = [int(s["id"]) for s in created_slices]
+            transaction.on_commit(lambda: sync_jobs(slice_ids, announce=False))
         
         return {
             "original_job_id": str(job.id),

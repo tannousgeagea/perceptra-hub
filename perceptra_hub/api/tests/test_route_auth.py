@@ -24,7 +24,7 @@ from fastapi.routing import APIRoute  # noqa: E402
 # authenticates (require_permission, get_project_context, ...) is built on one
 # of these, so reaching any of them anywhere in the tree is enough.
 AUTH_ROOTS = {
-    "get_current_user",                 # users.auth / auth.queries.dependencies (JWT)
+    "get_current_user",                 # users.auth (JWT)
     "get_request_context",              # organizations.dependencies (JWT or X-API-Key + org)
     "authenticate_agent_from_header",   # compute agents (X-Agent-Key + X-Agent-Secret)
 }
