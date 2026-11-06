@@ -21,6 +21,7 @@ class Notification(models.Model):
         ASSIGNED = 'assigned', _('Job assigned')
         SENT_BACK = 'sent_back', _('Work sent back')
         READY_FOR_REVIEW = 'ready_for_review', _('Ready for review')
+        COMPLETED = 'completed', _('Job completed')
 
     recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='notifications')

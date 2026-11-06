@@ -5,22 +5,24 @@ never raises into the write.
 
 - Job gets a new assignee        → "X assigned you Job N"      (to the assignee)
 - ImageReview, not approved      → "X sent back N images"      (to the job's assignee)
-- Image becomes 'annotated' and
-  its job has nothing left to do → "Job N is ready for review" (to the reviewers)
+
+Job status follows its images (jobs.lifecycle). An image status change, a
+job image added or removed, or a new assignee re-syncs the job; the
+transition sends its own notice:
+- job → in_review                → "Job N is ready for review" (to the reviewers)
+- job → completed                → "Job N is complete"         (to the assignee and assigner)
 """
 import logging
 
 from django.db import transaction
-from django.db.models import Count, Q
-from django.db.models.signals import post_save, pre_save
+from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
+from jobs.lifecycle import jobs_of_image, sync_jobs
 from jobs.models import Job, JobImage
 from projects.models import ImageReview, ProjectImage
 
 logger = logging.getLogger(__name__)
-
-PENDING_STATUSES = ('unannotated', 'rejected')
 
 
 def _touches(update_fields, field: str) -> bool:
@@ -31,6 +33,8 @@ def _touches(update_fields, field: str) -> bool:
 
 @receiver(pre_save, sender=Job, dispatch_uid='notifications_job_pre_save')
 def remember_assignee(sender, instance, raw=False, update_fields=None, **kwargs):
+    # Forget the previous save's value: only this save's change counts.
+    instance.__dict__.pop('_previous_assignee_id', None)
     if raw or instance.pk is None or not _touches(update_fields, 'assignee'):
         return
     instance._previous_assignee_id = (
@@ -67,6 +71,17 @@ def job_saved(sender, instance, created, raw=False, update_fields=None, **kwargs
     transaction.on_commit(send)
 
 
+@receiver(post_save, sender=Job, dispatch_uid='jobs_status_on_assignee')
+def job_assignee_changed(sender, instance, created, raw=False, **kwargs):
+    """A job given to someone, or taken back: assigned ↔ unassigned (when work is left)."""
+    if raw or created or not hasattr(instance, '_previous_assignee_id'):
+        return
+    if instance._previous_assignee_id == instance.assignee_id:
+        return
+    job_id = instance.pk
+    transaction.on_commit(lambda: sync_jobs([job_id]))
+
+
 # ─── Work sent back ──────────────────────────────────────────────────────────
 
 @receiver(post_save, sender=ImageReview, dispatch_uid='notifications_review_saved')
@@ -91,6 +106,7 @@ def review_saved(sender, instance, created, raw=False, **kwargs):
 
 @receiver(pre_save, sender=ProjectImage, dispatch_uid='notifications_image_pre_save')
 def remember_status(sender, instance, raw=False, update_fields=None, **kwargs):
+    instance.__dict__.pop('_previous_status', None)
     if raw or instance.pk is None or not _touches(update_fields, 'status'):
         return
     instance._previous_status = (
@@ -98,33 +114,37 @@ def remember_status(sender, instance, raw=False, update_fields=None, **kwargs):
     )
 
 
-@receiver(post_save, sender=ProjectImage, dispatch_uid='notifications_image_saved')
+@receiver(post_save, sender=ProjectImage, dispatch_uid='jobs_status_on_image_saved')
 def image_saved(sender, instance, created, raw=False, **kwargs):
-    if raw or created or instance.status != 'annotated':
+    """The image changed status: its jobs may now be ready, complete, or back to work."""
+    if raw or created or not hasattr(instance, '_previous_status'):
         return
-    if getattr(instance, '_previous_status', 'annotated') == 'annotated':
-        return  # not a change into 'annotated'
+    if instance._previous_status == instance.status:
+        return
     image_id = instance.pk
-    transaction.on_commit(lambda: _check_jobs_ready(image_id))
+    # Whoever reviewed it closes the job, if this was the last one.
+    actor_id = instance.reviewed_by_id if instance.status in ('reviewed', 'approved', 'dataset') else None
+    transaction.on_commit(lambda: _sync_image_jobs(image_id, actor_id))
 
 
-def _check_jobs_ready(project_image_id) -> None:
-    from notifications.services import notify_ready_for_review, project_reviewer_ids
-
+def _sync_image_jobs(project_image_id, actor_id=None) -> None:
     try:
-        job_ids = list(
-            JobImage.objects.filter(project_image_id=project_image_id, is_active=True)
-            .exclude(job__status='sliced')
-            .values_list('job_id', flat=True)
-        )
-        for job in Job.objects.filter(pk__in=job_ids).select_related('project__organization', 'assignee'):
-            counts = JobImage.objects.filter(job=job, is_active=True, project_image__is_active=True).aggregate(
-                pending=Count('id', filter=Q(project_image__status__in=PENDING_STATUSES)),
-                waiting=Count('id', filter=Q(project_image__status='annotated')),
-            )
-            if counts['pending'] or not counts['waiting']:
-                continue
-            recipients = project_reviewer_ids(job.project) - {job.assignee_id}
-            notify_ready_for_review(job, counts['waiting'], recipients)
+        sync_jobs(jobs_of_image(project_image_id), actor_id=actor_id)
     except Exception:
-        logger.exception('ready-for-review check for image %s failed', project_image_id)
+        logger.exception('job status sync for image %s failed', project_image_id)
+
+
+# ─── Images added to / removed from a job ────────────────────────────────────
+
+@receiver(post_save, sender=JobImage, dispatch_uid='jobs_status_on_job_image_saved')
+def job_image_saved(sender, instance, created, raw=False, update_fields=None, **kwargs):
+    if raw or not (created or _touches(update_fields, 'is_active')):
+        return
+    job_id = instance.job_id
+    transaction.on_commit(lambda: sync_jobs([job_id]))
+
+
+@receiver(post_delete, sender=JobImage, dispatch_uid='jobs_status_on_job_image_deleted')
+def job_image_deleted(sender, instance, **kwargs):
+    job_id = instance.job_id
+    transaction.on_commit(lambda: sync_jobs([job_id]))

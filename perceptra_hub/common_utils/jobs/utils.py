@@ -10,20 +10,7 @@ from django.utils.timezone import now
 import logging
 import re
 
-def update_job_status(job: Job):
-    images = job.images.select_related("project_image").all()
-    statuses = [img.project_image.status for img in images]
-
-    if not job.assignee:
-        job.status = "unassigned"
-    elif all(s in ["reviewed", "dataset"] for s in statuses):
-        job.status = "completed"
-    elif all(s in ["annotated", "reviewed"] for s in statuses):
-        job.status = "in_review"
-    else:
-        job.status = "assigned"
-
-    job.save(update_fields=["status"])
+# A job's status is kept in step with its images by jobs.lifecycle.
 
 
 def _get_next_job_number(project, prefix: str) -> int:

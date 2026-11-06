@@ -135,6 +135,14 @@ class BaseConfig:
             "queue": 'activity'
         }
     },
+
+    'prune-read-notifications': {
+        'task': 'api.tasks.notifications.prune_read_notifications',
+        'schedule': crontab(hour=3, minute=15),  # Daily at 03:15
+        'options': {
+            "queue": 'activity'
+        }
+    },
     
     # Materialized views
     'refresh-materialized-views': {

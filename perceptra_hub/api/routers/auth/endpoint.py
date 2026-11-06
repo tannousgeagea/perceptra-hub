@@ -41,12 +41,10 @@ router = APIRouter(
 
 
 # from .queries.auth import router as auth_router
-from .queries.protected import router as protected_router
 from .queries.auth_v2 import router as auth_router
 from .queries.oauth import router as oauth_router
 router.include_router(auth_router, tags=["Authentication"])
 router.include_router(oauth_router)
-router.include_router(protected_router, prefix="", tags=["Protected"])
 
 # for Q in QUERIES:
 #     module = importlib.import_module(Q)

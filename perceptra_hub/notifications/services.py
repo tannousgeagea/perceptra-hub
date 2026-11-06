@@ -216,3 +216,27 @@ def notify_ready_for_review(job, waiting: int, recipients: Iterable[int]) -> Non
             group_key=f"ready:{job.id}",
             build=build,
         )
+
+
+def notify_job_completed(job, reviewed: int, actor=None) -> None:
+    """Every image of the job is reviewed: tell its assignee and whoever assigned it."""
+    project = job.project
+
+    def build(previous):
+        by = f"{display_name(actor)} approved the last one" if actor else 'All images are reviewed'
+        return {
+            'title': f"{job.name} is complete",
+            'body': f"{by}: {plural(reviewed, 'image')} reviewed in {project.name}.",
+            'url': job_url(job),
+        }
+
+    for user_id in {job.assignee_id, job.assigned_by_id} - {None}:
+        notify(
+            recipient_id=user_id,
+            organization=project.organization,
+            project=project,
+            actor=actor,
+            kind=Notification.Kind.COMPLETED,
+            group_key=f"completed:{job.id}",
+            build=build,
+        )
