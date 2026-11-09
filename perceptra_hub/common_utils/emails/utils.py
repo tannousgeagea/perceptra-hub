@@ -26,6 +26,18 @@ def send_new_user_email(user, password):
     )
 
 
+def send_invitation_email(invitation, invite_url: str, context: dict):
+    """Email an organization invitation. Raises if sending fails."""
+    context = {**context, 'invite_url': invite_url}
+    send_mail(
+        f"{context['inviter_name']} invited you to join {context['org_name']} on Malumetrix",
+        render_to_string('emails/organization_invitation.txt', context),
+        settings.DEFAULT_FROM_EMAIL,
+        [invitation.email],
+        html_message=render_to_string('emails/organization_invitation.html', context),
+    )
+
+
 def send_password_reset_email(user, reset_url: str, valid_hours: int = 1):
     """Email the link to choose a new password. Raises if sending fails."""
     full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()

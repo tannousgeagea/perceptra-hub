@@ -46,6 +46,7 @@ PUBLIC_ROUTES = {
     ("GET", "/visibility-options/"): "static list of visibility options",
     ("GET", "/health"): "health check",
     ("GET", "/evaluation/health"): "health check",
+    ("GET", "/invitations/{token}"): "invitation page; the unguessable token in the link is the credential",
 }
 
 

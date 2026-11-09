@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light only">
+  <title>Join {{ org_name }} on Malumetrix</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body style="margin:0; padding:0; background:#EEF0F5; -webkit-text-size-adjust:100%;">
+  <!-- Preview line in the inbox -->
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0;">
+    {{ inviter_name }} invited you to join {{ org_name }} as {{ role_label }}.
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#EEF0F5;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+               style="max-width:560px; border-radius:14px; overflow:hidden; background:#FFFFFF; font-family:'Outfit', 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+
+          <!-- Ink header: who, and the organization in an annotation box -->
+          <tr>
+            <td style="background:#0D1117; padding:28px 36px 36px 36px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="width:28px; height:28px; border-radius:7px; background:#5A2DFF; background-image:linear-gradient(135deg,#2970FF,#5A2DFF,#8A3FFC); color:#FFFFFF; font-size:15px; font-weight:700; text-align:center; vertical-align:middle;">M</td>
+                  <td style="padding-left:10px; color:#E6E8EF; font-size:15px; font-weight:600; letter-spacing:0.2px;">Malumetrix</td>
+                </tr>
+              </table>
+
+              <p style="margin:32px 0 14px 0; color:#9CA3AF; font-size:16px; line-height:24px;">
+                {{ inviter_name }} invited you to join
+              </p>
+
+              <!-- Bounding box with its class label: the organization, labeled with your role -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding:0;">
+                    <!-- Own table so the label hugs its text instead of spanning the box -->
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="background:#2970FF; color:#FFFFFF; font-size:12px; font-weight:600; line-height:16px; padding:3px 9px; border-radius:4px 4px 0 0;">
+                          {{ role_label|lower }}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="border:2px solid #2970FF; border-radius:0 6px 6px 6px; padding:16px 22px; color:#FFFFFF; font-size:34px; font-weight:700; line-height:40px; letter-spacing:-0.5px;">
+                    {{ org_name }}
+                  </td>
+                </tr>
+              </table>
+
+              {% if org_description %}
+              <p style="margin:18px 0 0 0; color:#C9CDD6; font-size:15px; line-height:23px; max-width:440px;">
+                {{ org_description }}
+              </p>
+              {% endif %}
+              <p style="margin:12px 0 0 0; color:#9CA3AF; font-size:14px; line-height:20px;">
+                {{ members }} member{{ members|pluralize }}, {{ projects }} project{{ projects|pluralize }}
+              </p>
+            </td>
+          </tr>
+
+          <!-- Paper body -->
+          <tr>
+            <td style="padding:32px 36px 8px 36px; color:#0F172A;">
+
+              {% if message %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                <tr>
+                  <td style="border-left:3px solid #5A2DFF; padding:2px 0 2px 16px;">
+                    <p style="margin:0; font-size:16px; line-height:25px; color:#0F172A;">{{ message|linebreaksbr }}</p>
+                    <p style="margin:8px 0 0 0; font-size:14px; line-height:20px; color:#64748B;">{{ inviter_name }}</p>
+                  </td>
+                </tr>
+              </table>
+              {% endif %}
+
+              <p style="margin:0 0 4px 0; font-size:18px; line-height:26px; font-weight:600;">
+                You'll join as {{ role_label }}
+              </p>
+              <p style="margin:0 0 14px 0; font-size:15px; line-height:22px; color:#64748B;">
+                {{ role_summary }}.
+              </p>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+                {% for ability in role_abilities %}
+                <tr>
+                  <td style="vertical-align:top; padding:3px 10px 3px 0; color:#2970FF; font-size:15px; line-height:22px; font-weight:700;">&#10003;</td>
+                  <td style="padding:3px 0; font-size:15px; line-height:22px; color:#334155;">{{ ability }}</td>
+                </tr>
+                {% endfor %}
+              </table>
+
+              <!-- Button (table-based so it renders in Outlook) -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="border-radius:9px; background:#5A2DFF;">
+                    <a href="{{ invite_url }}" target="_blank" rel="noopener noreferrer"
+                       style="display:inline-block; padding:14px 26px; font-size:16px; font-weight:600; color:#FFFFFF; text-decoration:none; border-radius:9px;">
+                      Accept invitation
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:22px 0 0 0; font-size:13px; line-height:20px; color:#64748B;">
+                The invitation is for <span style="color:#0F172A;">{{ email }}</span> and works until {{ expires_at|date:"j F Y" }}.
+                If the button doesn't open, paste this link into your browser:
+              </p>
+              <p style="margin:6px 0 0 0; font-size:13px; line-height:20px; word-break:break-all;">
+                <a href="{{ invite_url }}" style="color:#5A2DFF;">{{ invite_url }}</a>
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:24px 36px 30px 36px;">
+              <p style="margin:0; padding-top:18px; border-top:1px solid #E5E7EB; font-size:12px; line-height:18px; color:#94A3B8;">
+                Sent by Malumetrix on behalf of {{ inviter_name }}{% if inviter_email %} ({{ inviter_email }}){% endif %}.
+                If you weren't expecting this invitation, you can ignore this email; nothing changes until you accept.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

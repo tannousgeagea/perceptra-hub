@@ -178,3 +178,56 @@ class ProjectMembership(models.Model):
         self.full_clean()
         super().save(*args, **kwargs)
 
+
+def _invitation_token() -> str:
+    import secrets
+    return secrets.token_urlsafe(32)
+
+
+class OrganizationInvitation(models.Model):
+    """
+    An invitation, sent by email, to join an organization with a role. The
+    person may not have an account yet: the link lets them sign up (or sign
+    in) and join in one step. The token in the link is the only credential.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', _('Pending')
+        ACCEPTED = 'accepted', _('Accepted')
+        REVOKED = 'revoked', _('Revoked')
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='invitations')
+    email = models.EmailField(help_text=_('Who the invitation is for; accepting needs an account with this email'))
+    role = models.ForeignKey(Role, on_delete=models.PROTECT, related_name='invitations')
+    token = models.CharField(max_length=64, unique=True, default=_invitation_token, editable=False)
+    message = models.TextField(blank=True, default='', help_text=_('Optional personal note from the inviter'))
+    invited_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='invitations_sent',
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    last_sent_at = models.DateTimeField(null=True, blank=True)
+    send_count = models.PositiveIntegerField(default=0)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    accepted_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='invitations_accepted',
+    )
+
+    class Meta:
+        db_table = 'organization_invitation'
+        verbose_name_plural = 'Organization Invitations'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['organization', 'status']),
+            models.Index(fields=['email', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.email} → {self.organization.name} ({self.role.name}, {self.status})"
+
+    @property
+    def is_expired(self) -> bool:
+        from django.utils import timezone
+        return self.status == self.Status.PENDING and self.expires_at <= timezone.now()
+

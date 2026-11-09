@@ -3,7 +3,7 @@ FastAPI routes for authentication.
 """
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from django.contrib.auth import get_user_model, authenticate
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from typing import Optional
 from urllib.parse import urlencode
 import logging
@@ -41,11 +41,28 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 # ============= Registration =============
+def _username_from_email(email: str) -> str:
+    import re
+
+    base = re.sub(r'[^A-Za-z0-9._-]', '', email.split('@', 1)[0])[:140] or 'user'
+    if len(base) < 3:
+        base = f"{base}-user"  # "ab" → "ab-user" (a separator keeps it from reading as a word)
+    candidate, n = base, 1
+    while User.objects.filter(username=candidate).exists():
+        n += 1
+        candidate = f"{base}{n}"
+    return candidate
+
+
 @sync_to_async
 def register_new_user(user_data: UserRegister):
     """
     Synchronous function to register a new user.
     """
+    # No username given: make a free one from the email ("ada.l@x.com" → "ada.l", "ada.l2", ...)
+    if not user_data.username:
+        user_data.username = _username_from_email(user_data.email)
+
     # Check if username exists
     if User.objects.filter(username=user_data.username).exists():
         raise HTTPException(
@@ -54,13 +71,57 @@ def register_new_user(user_data: UserRegister):
         )
     
     # Check if email exists
-    if User.objects.filter(email=user_data.email).exists():
+    if User.objects.filter(email__iexact=user_data.email).exists():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
-    # Create user
+
+    # Signing up from an invitation: check it before creating anything.
+    invitation = None
+    if user_data.invite_token:
+        from memberships import invitations as invites
+
+        try:
+            invitation = invites.check_usable(invites.get_by_token(user_data.invite_token), user_data.email)
+        except invites.InvitationError as err:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": err.code, "message": err.message},
+            )
+
+    with transaction.atomic():
+        user = _create_user_and_organization(user_data, invitation)
+
+    # Create tokens
+    tokens = create_tokens_for_user(user)
+
+    organizations = [
+        {
+            "id": str(m.organization.org_id),
+            "name": m.organization.name,
+            "slug": m.organization.slug,
+            "role": m.role.name,
+        }
+        for m in OrganizationMembership.objects.filter(user=user).select_related('organization', 'role')
+    ]
+
+    return {
+        "tokens": tokens,
+        "user": {
+            "id": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "organizations": organizations
+        },
+        "username": user.username  # For logging
+    }
+
+
+def _create_user_and_organization(user_data: UserRegister, invitation=None):
+    """The account, plus either the invited organization or a personal workspace."""
     user = User.objects.create_user(
         username=user_data.username,
         email=user_data.email,
@@ -68,7 +129,14 @@ def register_new_user(user_data: UserRegister):
         first_name=user_data.first_name,
         last_name=user_data.last_name,
     )
-    
+
+    if invitation is not None:
+        from memberships import invitations as invites
+
+        invites.accept(invitation, user)
+        logger.info(f"{user.username} joined organization {invitation.organization_id} by invitation")
+        return user
+
     # Ensure user has at least one organization
     if not OrganizationMembership.objects.filter(user=user).exists():
         # Create personal organization
@@ -92,25 +160,8 @@ def register_new_user(user_data: UserRegister):
         )
         
         logger.info(f"Created personal organization for {user.username}")
-    
-    # Create tokens
-    tokens = create_tokens_for_user(user)
-    
-    # Get user organizations (will be empty for new user)
-    organizations = []
-    
-    return {
-        "tokens": tokens,
-        "user": {
-            "id": str(user.id),
-            "username": user.username,
-            "email": user.email,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "organizations": organizations
-        },
-        "username": user.username  # For logging
-    }
+
+    return user
 
 @router.post(
     "/register",
