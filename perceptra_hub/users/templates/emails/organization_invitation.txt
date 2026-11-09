@@ -9,7 +9,9 @@ A note from {{ inviter_name }}:
 {% endif %}
 You would join as {{ role_label }}: {{ role_summary|lower }}.
 {% for ability in role_abilities %}  - {{ ability }}
-{% endfor %}
+{% endfor %}{% if project_names %}
+You'll have access to {{ project_names|length }} project{{ project_names|length|pluralize }}: {{ project_names|join:", " }}.
+{% endif %}
 Accept the invitation:
 {{ invite_url }}
 

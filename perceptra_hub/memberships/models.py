@@ -201,6 +201,10 @@ class OrganizationInvitation(models.Model):
     role = models.ForeignKey(Role, on_delete=models.PROTECT, related_name='invitations')
     token = models.CharField(max_length=64, unique=True, default=_invitation_token, editable=False)
     message = models.TextField(blank=True, default='', help_text=_('Optional personal note from the inviter'))
+    projects = models.ManyToManyField(
+        Project, blank=True, related_name='invitations',
+        help_text=_('Projects the person is added to (with the same role) when they accept'),
+    )
     invited_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name='invitations_sent',
     )

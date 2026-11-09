@@ -28,3 +28,4 @@ class OrganizationInvitationAdmin(ModelAdmin):
     list_filter = ("organization", "status", "role")
     search_fields = ("email", "organization__name")
     readonly_fields = ("token", "created_at", "last_sent_at", "send_count", "accepted_at", "accepted_by")
+    filter_horizontal = ("projects",)

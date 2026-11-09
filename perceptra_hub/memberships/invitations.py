@@ -95,13 +95,31 @@ def state_of(invitation: OrganizationInvitation) -> str:
 
 # ─── Admin side ──────────────────────────────────────────────────────────────
 
-def invite(organization, email: str, role_name: str, invited_by, message: str = '') -> OrganizationInvitation:
+def _org_projects(organization, project_ids):
+    """The organization's active projects among these ids (UUIDs); InvitationError for any other."""
+    from projects.models import Project
+
+    wanted = {str(pid) for pid in (project_ids or [])}
+    if not wanted:
+        return []
+    found = list(Project.objects.filter(
+        organization=organization, project_id__in=wanted, is_active=True, is_deleted=False,
+    ))
+    if len(found) != len(wanted):
+        raise InvitationError('bad_project', 'Some of the chosen projects are not in this organization')
+    return found
+
+
+def invite(organization, email: str, role_name: str, invited_by, message: str = '',
+           project_ids=None) -> OrganizationInvitation:
     """
-    Create (or renew) the pending invitation for this email. Raises
-    InvitationError if the role can't be granted or they are already a member.
+    Create (or renew) the pending invitation for this email, optionally with
+    projects to join. Raises InvitationError if the role can't be granted, a
+    project isn't the organization's, or they are already a member.
     """
     from django.contrib.auth import get_user_model
 
+    projects = _org_projects(organization, project_ids)
     email = email.strip().lower()
     role_name = role_name.strip().lower()
     if role_name not in INVITABLE_ROLES:
@@ -133,6 +151,7 @@ def invite(organization, email: str, role_name: str, invited_by, message: str = 
             invitation.message = (message or '').strip()[:1000]
             invitation.expires_at = expires
             invitation.save(update_fields=['role', 'invited_by', 'message', 'expires_at'])
+        invitation.projects.set(projects)
     return invitation
 
 
@@ -182,6 +201,7 @@ def serialize_for_admin(invitation: OrganizationInvitation) -> dict:
         'last_sent_at': invitation.last_sent_at.isoformat() if invitation.last_sent_at else None,
         'send_count': invitation.send_count,
         'link': invitation_url(invitation),
+        'projects': [{'id': str(p.project_id), 'name': p.name} for p in invitation.projects.order_by('name')],
     }
 
 
@@ -212,6 +232,10 @@ def email_context(invitation: OrganizationInvitation) -> dict:
         'email': invitation.email,
         'expires_at': invitation.expires_at,
         'valid_days': INVITATION_DAYS,
+        # Projects they'll be added to (only ones still active).
+        'project_names': list(
+            invitation.projects.filter(is_active=True, is_deleted=False).order_by('name').values_list('name', flat=True)
+        ) if invitation.pk else [],
         **_org_facts(organization),
     }
 
@@ -250,6 +274,7 @@ def preview(invitation: OrganizationInvitation) -> dict:
             'abilities': ctx['role_abilities'],
         },
         'invited_by': {'name': ctx['inviter_name'], 'email': ctx['inviter_email']} if invitation.invited_by_id else None,
+        'projects': ctx['project_names'],
         'message': invitation.message,
         'created_at': invitation.created_at.isoformat(),
         'expires_at': invitation.expires_at.isoformat(),
@@ -287,6 +312,15 @@ def accept(invitation: OrganizationInvitation, user) -> OrganizationMembership:
             organization=invitation.organization,
             defaults={'role': invitation.role, 'invited_by': invitation.invited_by, 'status': 'active'},
         )
+        # The projects chosen in the invitation, with the same role (existing
+        # project memberships are left as they are).
+        from memberships.models import ProjectMembership
+
+        for project in invitation.projects.filter(is_active=True, is_deleted=False):
+            ProjectMembership.objects.get_or_create(
+                user=user, project=project,
+                defaults={'role': invitation.role, 'organization': invitation.organization},
+            )
         invitation.status = OrganizationInvitation.Status.ACCEPTED
         invitation.accepted_at = timezone.now()
         invitation.accepted_by = user

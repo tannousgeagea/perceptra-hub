@@ -14,6 +14,7 @@ Invitee:
 Signing up through an invitation goes through POST /auth/register with invite_token.
 """
 from typing import List, Literal, Optional
+from uuid import UUID
 
 from asgiref.sync import sync_to_async
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -28,6 +29,7 @@ router = APIRouter()
 
 ERROR_STATUS = {
     'bad_role': status.HTTP_400_BAD_REQUEST,
+    'bad_project': status.HTTP_400_BAD_REQUEST,
     'already_member': status.HTTP_409_CONFLICT,
     'not_pending': status.HTTP_409_CONFLICT,
     'not_found': status.HTTP_404_NOT_FOUND,
@@ -49,6 +51,8 @@ class InviteRequest(BaseModel):
     email: EmailStr
     role: Literal['viewer', 'editor', 'admin'] = 'viewer'
     message: Optional[str] = Field(None, max_length=1000)
+    # Projects (project_id UUIDs) to add them to when they accept.
+    project_ids: List[UUID] = Field(default_factory=list, max_length=100)
 
 
 # ─── Admin side ──────────────────────────────────────────────────────────────
@@ -63,7 +67,7 @@ async def create_invitation(
 
     @sync_to_async
     def run():
-        invitation = svc.invite(ctx.organization, data.email, data.role, ctx.user, data.message or '')
+        invitation = svc.invite(ctx.organization, data.email, data.role, ctx.user, data.message or '', data.project_ids)
         invitation = OrganizationInvitation.objects.select_related('role', 'invited_by').get(pk=invitation.pk)
         return invitation.pk, svc.serialize_for_admin(invitation)
 
@@ -73,6 +77,21 @@ async def create_invitation(
         raise _http(err)
     background_tasks.add_task(svc.send_invitation, invitation_id)
     return body
+
+
+@router.get("/organizations/invitations/projects")
+async def invitable_projects(ctx: RequestContext = Depends(get_request_context)) -> List[dict]:
+    """The organization's active projects, to choose from when inviting (all of them, for admins)."""
+    ctx.require_role('admin', 'owner')
+
+    @sync_to_async
+    def run():
+        from projects.models import Project
+
+        qs = Project.objects.filter(organization=ctx.organization, is_active=True, is_deleted=False).order_by('name')
+        return [{'id': str(p.project_id), 'name': p.name} for p in qs[:500]]
+
+    return await run()
 
 
 @router.get("/organizations/invitations")
