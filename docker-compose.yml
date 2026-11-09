@@ -72,6 +72,17 @@ services:
     networks:
       - internal
 
+  # Development mail catcher: the app's emails land in a web inbox
+  # (http://localhost:8025) instead of being sent. SMTP on mailpit:1025.
+  mailpit:
+    image: axllent/mailpit:v1.20.0
+    container_name: perceptrahub-mailpit
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+    networks:
+      - internal
+
 
 networks:
   internal:

@@ -26,5 +26,23 @@ def send_new_user_email(user, password):
     )
 
 
+def send_password_reset_email(user, reset_url: str, valid_hours: int = 1):
+    """Email the link to choose a new password. Raises if sending fails."""
+    full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    context = {
+        'name': full_name or user.username or user.email,
+        'email': user.email,
+        'reset_url': reset_url,
+        'valid_hours': valid_hours,
+    }
+    send_mail(
+        "Reset your Malumetrix password",
+        render_to_string('emails/password_reset_email.txt', context),
+        settings.DEFAULT_FROM_EMAIL,
+        [user.email],
+        html_message=render_to_string('emails/password_reset_email.html', context),
+    )
+
+
 
 

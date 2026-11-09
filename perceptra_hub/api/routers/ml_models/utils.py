@@ -46,6 +46,7 @@ def serialize_model_version(version: ModelVersion) -> dict:
             "onnx": onnx_url,
             "logs": logs_url,
         },
+        "tags": sorted(tag.name for tag in version.tags.all()),
         "created_by": version.created_by.email if version.created_by else None,
         "created_at": version.created_at,
         "deployed_at": version.deployed_at
@@ -117,7 +118,8 @@ def get_model_by_id(model_id: str, organization) -> Model:
             'tags',
             'versions__dataset_version__project',
             'versions__created_by',
-            'versions__deployed_by'
+            'versions__deployed_by',
+            'versions__tags',
         ).get(
             model_id=model_id,
             organization=organization,
