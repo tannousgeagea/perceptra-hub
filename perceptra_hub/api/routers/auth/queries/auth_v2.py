@@ -1,11 +1,13 @@
 """
 FastAPI routes for authentication.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from django.contrib.auth import get_user_model, authenticate
 from django.db import IntegrityError
 from typing import Optional
+from urllib.parse import urlencode
 import logging
+import os
 from asgiref.sync import sync_to_async
 
 from api.routers.auth.schemas import (
@@ -495,25 +497,29 @@ def process_password_reset_request(email: str):
     try:
         user = User.objects.get(email=email, is_active=True)
         
-        # Generate reset token
+        # The console's reset page takes the token from the link (valid 1 hour).
         reset_token = generate_password_reset_token(str(user.id))
-        
-        # TODO: Send email with reset link
-        # send_password_reset_email(user.email, reset_token)
-        
+        frontend = (os.getenv("FRONTEND_ENDPOINT") or "http://localhost:5173").rstrip("/")
         return {
             "user_found": True,
-            "email": user.email,
-            "reset_token": reset_token  # For dev logging only
+            "user": user,
+            "reset_url": f"{frontend}/reset-password?{urlencode({'token': reset_token})}",
         }
-        
+
     except User.DoesNotExist:
         # Don't reveal that email doesn't exist
-        return {
-            "user_found": False,
-            "email": email,
-            "reset_token": None
-        }
+        return {"user_found": False, "user": None, "reset_url": None}
+
+
+def send_password_reset_link(user, reset_url: str) -> None:
+    """Runs after the response (so its timing reveals nothing). Never logs the link."""
+    from common_utils.emails.utils import send_password_reset_email
+
+    try:
+        send_password_reset_email(user, reset_url)
+        logger.info("Password reset email sent to user %s", user.id)
+    except Exception as exc:
+        logger.error("Password reset email to user %s failed: %s", user.id, type(exc).__name__)
 
 @router.post(
     "/password-reset-request",
@@ -521,21 +527,21 @@ def process_password_reset_request(email: str):
     summary="Request Password Reset",
     description="Request password reset email"
 )
-async def request_password_reset(reset_data: PasswordResetRequest):
+async def request_password_reset(reset_data: PasswordResetRequest, background_tasks: BackgroundTasks):
     """
     Request password reset.
-    
-    Sends password reset email with token.
-    Note: Returns success even if email doesn't exist (security).
+
+    Emails a link to the reset page, after the response is sent.
+    Note: Returns the same answer whether or not the email exists (security).
     """
     result = await process_password_reset_request(reset_data.email)
-    
+
     if result["user_found"]:
-        logger.info(f"Password reset requested for: {result['email']}")
-        logger.info(f"Reset token (dev only): {result['reset_token']}")
+        logger.info("Password reset requested for user %s", result["user"].id)
+        background_tasks.add_task(send_password_reset_link, result["user"], result["reset_url"])
     else:
-        logger.warning(f"Password reset requested for non-existent email: {result['email']}")
-    
+        logger.info("Password reset requested for an unknown email")
+
     return MessageResponse(
         message="If the email exists, a password reset link has been sent"
     )

@@ -53,7 +53,7 @@ class Training(SyncAPIResource):
         return self._client._request("GET", f"/training-sessions/{session_id}", cast_to=TrainingSession)
 
     def stream_logs(self, session_id: str) -> Iterator[str]:
-        with self._client._stream("GET", f"/training-sessions/{session_id}/logs") as response:
+        with self._client._stream("GET", f"/training-sessions/{session_id}/logs/stream") as response:
             yield from iter_sse_lines(response)
 
 
@@ -78,6 +78,6 @@ class AsyncTraining(AsyncAPIResource):
         return await self._client._request("GET", f"/training-sessions/{session_id}", cast_to=TrainingSession)
 
     async def stream_logs(self, session_id: str) -> AsyncIterator[str]:
-        async with self._client._stream("GET", f"/training-sessions/{session_id}/logs") as response:
+        async with self._client._stream("GET", f"/training-sessions/{session_id}/logs/stream") as response:
             async for line in aiter_sse_lines(response):
                 yield line

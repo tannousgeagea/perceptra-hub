@@ -1,6 +1,6 @@
 from perceptra._version import __version__
 
-DEFAULT_BASE_URL = "http://localhost:29082"
+DEFAULT_BASE_URL = "http://localhost:29085"  # the data API
 API_VERSION = "v1"
 USER_AGENT = f"perceptra-python/{__version__}"
 DEFAULT_TIMEOUT = 30.0

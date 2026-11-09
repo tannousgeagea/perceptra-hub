@@ -59,12 +59,10 @@ async def create_annotation_class(
 ):
     @sync_to_async
     def create_class_record(project: Project, data: AnnotationClassCreate):
-        annotation_group = AnnotationGroup.objects.filter(project=project).first()
+        annotation_group = AnnotationGroup.objects.filter(project=project).order_by("id").first()
         if not annotation_group:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Project {project.project_id} does not have an annotation group."
-            )
+            # The project's first class: create its group (as ingest does).
+            annotation_group = AnnotationGroup.objects.create(project=project, name="default")
 
         # Determine the next available class_id
         max_class = (

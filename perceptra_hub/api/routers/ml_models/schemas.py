@@ -55,6 +55,7 @@ class ModelVersionResponse(BaseModel):
     config: dict = Field(default_factory=dict)
     dataset: Optional[DatasetInfoResponse] = None
     artifacts: ModelArtifactResponse
+    tags: List[str] = Field(default_factory=list)
     created_by: Optional[str] = None
     created_at: datetime
     deployed_at: Optional[datetime] = None

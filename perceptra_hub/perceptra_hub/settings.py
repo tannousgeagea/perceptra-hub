@@ -173,13 +173,18 @@ GOOGLE_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = "smtp.office365.com"
-EMAIL_PORT = 587  # Or 465 for SSL
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = "no-reply@perceptra-hub.com"
-EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")  # Use an env variable!
-DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+# Outgoing email, all from the environment (.env). Development points at the
+# Mailpit container (EMAIL_HOST=mailpit, EMAIL_PORT=1025, no TLS, no login);
+# production at a sending service's SMTP with its credentials.
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() in ("1", "true", "yes")
+EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "false").lower() in ("1", "true", "yes")
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Malumetrix <no-reply@perceptra-hub.com>")
 SECRET_ENCRYPTION_KEY = os.getenv("SECRET_ENCRYPTION_KEY")
 COMPUTE_CREDENTIALS_KEY = env("COMPUTE_CREDENTIALS_KEY")
 

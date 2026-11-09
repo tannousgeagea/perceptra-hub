@@ -116,7 +116,7 @@ except AuthenticationError:
 | Parameter | Default | Environment Variable |
 |-----------|---------|---------------------|
 | `api_key` | — | `PERCEPTRA_API_KEY` |
-| `base_url` | `http://localhost:29082` | `PERCEPTRA_BASE_URL` |
+| `base_url` | `http://localhost:29085` (the data API) | `PERCEPTRA_BASE_URL` |
 | `timeout` | `30.0` | — |
 | `max_retries` | `3` | — |
 

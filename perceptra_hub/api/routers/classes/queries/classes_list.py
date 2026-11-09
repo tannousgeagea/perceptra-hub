@@ -65,10 +65,8 @@ async def get_classes(
     def get_annotation_classes(project:Project):
         annotation_group = AnnotationGroup.objects.filter(project=project_ctx.project).first()
         if not annotation_group:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"{project_id} has not annotation group."
-            )
+            # A new project has no classes yet: an empty list, not an error.
+            return results
 
         classes = annotation_group.classes.all().order_by('class_id')
         for cls in classes:
