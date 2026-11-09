@@ -9,13 +9,17 @@ from datetime import datetime
 
 class UserRegister(BaseModel):
     """Schema for user registration."""
-    username: str = Field(..., min_length=3, max_length=150)
+    # Optional in the sign-up form: when left out, one is made from the email.
+    username: Optional[str] = Field(None, min_length=3, max_length=150)
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     password_confirm: str = Field(..., min_length=8, max_length=128)
     first_name: str = Field(..., min_length=1, max_length=150)
     last_name: str = Field(..., min_length=1, max_length=150)
-    
+    # Signing up from an invitation link: join that organization instead of
+    # getting a personal workspace. The email must match the invitation.
+    invite_token: Optional[str] = Field(None, max_length=64)
+
     @validator('password_confirm')
     def passwords_match(cls, v, values):
         if 'password' in values and v != values['password']:
