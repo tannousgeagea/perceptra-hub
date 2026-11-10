@@ -98,6 +98,20 @@ def get_user_organizations_data(user):
         for m in memberships
     ]
 
+@sync_to_async
+def usable_invitation(invite_token: Optional[str], email: str):
+    """The pending invitation for this email, or None (never raises)."""
+    if not invite_token:
+        return None
+    from memberships import invitations as invites
+
+    try:
+        return invites.check_usable(invites.get_by_token(invite_token), email)
+    except invites.InvitationError as err:
+        logger.info(f"OAuth sign-in with an unusable invitation: {err.code}")
+        return None
+
+
 @router.api_route(
     "/callback",
     methods=["GET", "POST"],
@@ -127,6 +141,8 @@ async def oauth_callback(
     """
     
     
+    invite_token = None
+
     # Handle GET request (redirect from OAuth provider)
     if request.method == "GET":
         code = request.query_params.get("code")
@@ -164,7 +180,8 @@ async def oauth_callback(
         code = callback_data.code
         state = callback_data.state
         provider = callback_data.provider
-    
+        invite_token = callback_data.invite_token
+
     # Verify state to prevent CSRF
     logger.warning(f"State: {state}")
     if not OAuthStateManager.verify_state(state):
@@ -242,6 +259,10 @@ async def oauth_callback(
                 detail=f"Unsupported provider: {provider}"
             )
         
+        # An invitation this provider email can use (None otherwise; the
+        # invite page then explains why, e.g. a different account).
+        invitation = await usable_invitation(invite_token, user_data_dict['email'])
+
         # Create or update user with all OIDC fields
         user, social_account, created = await sync_to_async(create_or_update_oauth_user)(
             provider=provider,
@@ -259,8 +280,9 @@ async def oauth_callback(
             access_token=access_token,
             refresh_token=refresh_token,
             expires_in=expires_in,
+            invitation=invitation,
         )
-        
+
         # Create JWT tokens for your platform
         tokens = create_tokens_for_user(user)
         

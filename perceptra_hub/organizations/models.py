@@ -44,8 +44,9 @@ class Organization(models.Model):
     
     # Basic information
     name = models.CharField(
+        # Display text, not an identifier (org_id and slug are unique): many
+        # organizations may share a name, e.g. "Olga's Workspace".
         max_length=255,
-        unique=True,
         validators=[MinLengthValidator(2)],
         help_text=_('Organization name')
     )

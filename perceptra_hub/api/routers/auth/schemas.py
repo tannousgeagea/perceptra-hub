@@ -245,6 +245,9 @@ class OAuthCallbackRequest(BaseModel):
     code: str
     state: str
     provider: str  # 'microsoft' or 'google'
+    # Signing in from an invitation link: a new account joins that
+    # organization instead of getting a personal workspace.
+    invite_token: Optional[str] = None
 
 class OAuthUserInfo(BaseModel):
     """User information from OAuth provider."""
