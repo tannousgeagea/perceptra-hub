@@ -9,8 +9,7 @@ from datetime import datetime, timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from organizations.models import Organization
-from memberships.models import OrganizationMembership, Role
+from memberships.models import OrganizationMembership
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -451,6 +450,7 @@ def create_or_update_oauth_user(
     access_token: Optional[str] = None,
     refresh_token: Optional[str] = None,
     expires_in: Optional[int] = None,
+    invitation=None,
 ) -> tuple:
     """
     Create or update user from OAuth provider.
@@ -471,7 +471,10 @@ def create_or_update_oauth_user(
         access_token: OAuth access token
         refresh_token: OAuth refresh token
         expires_in: Token expiration time in seconds
-        
+        invitation: A pending invitation already checked for this email. An
+            account with no organization joins it instead of getting a
+            personal workspace.
+
     Returns:
         Tuple of (User, SocialAccount, created: bool)
     """
@@ -543,29 +546,22 @@ def create_or_update_oauth_user(
             
             logger.info(f"Created new OAuth user: {user.username} ({provider})")
         
+            # Signing in from an invitation: join that organization.
+            if invitation is not None and not OrganizationMembership.objects.filter(user=user).exists():
+                from memberships import invitations as invites
+
+                try:
+                    invites.accept(invitation, user)
+                    logger.info(f"{user.username} joined organization {invitation.organization_id} by invitation")
+                except invites.InvitationError as err:
+                    # Used or withdrawn in the meantime: fall back to a workspace.
+                    logger.info(f"Invitation not accepted for {user.username}: {err.code}")
+
             # Ensure user has at least one organization
             if not OrganizationMembership.objects.filter(user=user).exists():
-                # Create personal organization
-                personal_org = Organization.objects.create(
-                    name=f"{user.first_name or user.username}'s Workspace",
-                    slug=f"{user.username}-workspace",
-                    owner=user,
-                )
-                
-                # Get or create owner role
-                owner_role, _ = Role.objects.get_or_create(
-                    name='owner',
-                    defaults={'description': 'Organization owner'}
-                )
-                
-                # Make user owner of their organization
-                OrganizationMembership.objects.create(
-                    user=user,
-                    organization=personal_org,
-                    role=owner_role
-                )
-                
-                logger.info(f"Created personal organization for {user.username}")
+                from organizations.workspaces import create_personal_workspace
+
+                create_personal_workspace(user)
         
         # Check if this is the first social account for this provider
         is_primary = not SocialAccount.objects.filter(
