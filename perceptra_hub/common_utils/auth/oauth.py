@@ -149,7 +149,12 @@ class GoogleOAuth:
             "provider_user_id": user_info.get('id', ''),
             "subject": id_token_claims.get('sub') or user_info.get('id', ''),
             "email": user_info.get('email', ''),
-            "email_verified": user_info.get('verified_email', False) or id_token_claims.get('email_verified', False),
+            # Only an explicit true counts (userinfo v2 says "verified_email", v3 and the ID token "email_verified").
+            "email_verified": any(
+                value is True
+                for value in (user_info.get('verified_email'), user_info.get('email_verified'),
+                              id_token_claims.get('email_verified'))
+            ),
             "given_name": user_info.get('given_name', ''),
             "family_name": user_info.get('family_name', ''),
             "display_name": user_info.get('name', ''),
@@ -170,7 +175,11 @@ class MicrosoftOAuth:
     """Microsoft OAuth 2.0 handler."""
     
     SCOPES = ["openid", "profile", "email", "User.Read"]
-    
+
+    # Tenant of personal Microsoft accounts (outlook.com, hotmail.com, …),
+    # whose email addresses Microsoft itself has verified.
+    CONSUMER_TENANT_ID = "9188040d-6c67-4c5b-b112-36a304b66dad"
+
     @staticmethod
     def extract_user_data(token_response: Dict[str, Any], user_info: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -195,12 +204,25 @@ class MicrosoftOAuth:
             except Exception as e:
                 logger.warning(f"Could not decode ID token: {e}")
         
+        # Which email Microsoft vouches for. Graph's "mail" and
+        # "userPrincipalName" are set by whoever runs the tenant, so they prove
+        # nothing ("nOAuth"). Only the ID token's email claim counts, and only
+        # for personal Microsoft accounts or when Microsoft marks the email's
+        # domain as verified by the tenant (optional claim xms_edov).
+        email_claim = id_token_claims.get('email', '')
+        email_verified = bool(email_claim) and (
+            id_token_claims.get('tid') == MicrosoftOAuth.CONSUMER_TENANT_ID
+            or id_token_claims.get('xms_edov') in (True, 1, 'true', 'True', '1')
+        )
+
         # Extract data with fallbacks
         return {
             "provider_user_id": user_info.get('id', ''),
             "subject": id_token_claims.get('sub') or id_token_claims.get('oid') or user_info.get('id', ''),
-            "email": user_info.get('mail') or user_info.get('userPrincipalName') or id_token_claims.get('email', ''),
-            "email_verified": id_token_claims.get('email_verified', True),  # Microsoft emails are generally verified
+            "email": email_claim if email_verified else (
+                user_info.get('mail') or user_info.get('userPrincipalName') or email_claim
+            ),
+            "email_verified": email_verified,
             "given_name": user_info.get('givenName', ''),
             "family_name": user_info.get('surname', ''),
             "display_name": user_info.get('displayName', ''),
@@ -397,6 +419,18 @@ class OAuthStateManager:
 
 # ============= User Creation/Update Helper =============
 
+class OAuthEmailNotVerified(Exception):
+    """The provider didn't confirm the email, so it can't name a Malumetrix account."""
+
+    def __init__(self, provider: str):
+        self.provider = provider
+        label = {'microsoft': 'Microsoft', 'google': 'Google'}.get(provider, provider)
+        super().__init__(
+            f"{label} didn't confirm the email address of this account, so it can't be used to sign in. "
+            "Sign in with your email and password, or use an account whose email is verified."
+        )
+
+
 def normalize_email(email: str) -> str:
     """Normalize email to lowercase."""
     return email.lower().strip()
@@ -492,7 +526,11 @@ def create_or_update_oauth_user(
         
         # Update existing user
         user = social_account.user
-        user.email = email
+        # Follow an email change at the provider only when it's verified and
+        # not another account's (it is how people sign in with a password).
+        if (email_verified and email and email != user.email
+                and not User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists()):
+            user.email = email
         user.first_name = given_name or user.first_name
         user.last_name = family_name or user.last_name
         user.save()
@@ -521,9 +559,16 @@ def create_or_update_oauth_user(
         return user, social_account, False
         
     except SocialAccount.DoesNotExist:
+        # First sign-in with this provider account: the email decides which
+        # Malumetrix account it becomes, so the provider must have verified it.
+        # Otherwise anyone could claim someone else's address (and account).
+        if not email_verified or not email:
+            logger.warning(f"Refused {provider} sign-in: email not verified by the provider")
+            raise OAuthEmailNotVerified(provider)
+
         # Try to find user by email
         try:
-            user = User.objects.get(email=email)
+            user = User.objects.get(email__iexact=email)
             logger.info(f"Linking {provider} account to existing user: {user.username}")
             
         except User.DoesNotExist:
