@@ -16,6 +16,7 @@ from api.routers.auth.schemas import (
 from common_utils.auth.oauth import (
     MicrosoftOAuth,
     GoogleOAuth,
+    OAuthEmailNotVerified,
     OAuthStateManager,
     create_or_update_oauth_user,
 )
@@ -261,7 +262,10 @@ async def oauth_callback(
         
         # An invitation this provider email can use (None otherwise; the
         # invite page then explains why, e.g. a different account).
-        invitation = await usable_invitation(invite_token, user_data_dict['email'])
+        invitation = (
+            await usable_invitation(invite_token, user_data_dict['email'])
+            if user_data_dict['email_verified'] else None
+        )
 
         # Create or update user with all OIDC fields
         user, social_account, created = await sync_to_async(create_or_update_oauth_user)(
@@ -306,6 +310,8 @@ async def oauth_callback(
         
     except HTTPException:
         raise
+    except OAuthEmailNotVerified as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except Exception as e:
         logger.error(f"OAuth callback error ({provider}): {e}", exc_info=True)
         raise HTTPException(
