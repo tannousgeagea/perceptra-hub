@@ -10,12 +10,13 @@ from pydantic import BaseModel, Field
 import logging
 from asgiref.sync import sync_to_async
 from datetime import datetime
-from django.db.models import Count, Min, Q
+from django.db.models import Count, Min, Prefetch, Q
 
 from api.routers.projects.schemas import JobImagesResponce
 from api.dependencies import get_project_context, ProjectContext
 from jobs.models import Job, JobImage
 from images.models import Image
+from annotations.models import Annotation
 from common_utils.image.utils import parse_project_image_query, apply_job_image_filters
 
 from django.contrib.auth import get_user_model
@@ -128,13 +129,23 @@ def _job_images_response(queryset, job_summary, *, skip, limit, status_filter, a
     image_ids = list(queryset.values_list('project_image__image__id', flat=True))
     project_image_ids = list(queryset.values_list('project_image__id', flat=True))
 
+    # Everything each row shows, in a fixed number of queries for the page
+    # (it was ~4 per image: annotations, tags, storage profile, users).
     job_images = list(
         queryset.select_related(
-            'project_image__image',
-            'project_image__mode'
+            'project_image__image__storage_profile',
+            'project_image__image__uploaded_by',
+            'project_image__reviewed_by',
+            'project_image__mode',
         ).prefetch_related(
-            'project_image__annotations__annotation_class',
-            'project_image__annotations__annotation_type'
+            'project_image__image__tags',
+            Prefetch(
+                'project_image__annotations',
+                queryset=Annotation.objects.filter(is_active=True).select_related(
+                    'annotation_class', 'annotation_type', 'created_by'
+                ).order_by('id'),
+                to_attr='active_annotations',
+            ),
         )[skip:skip + limit]
     )
 
@@ -204,9 +215,7 @@ def _job_images_response(queryset, job_summary, *, skip, limit, status_filter, a
                         "created_at": ann.created_at.isoformat(),
                         "created_by": ann.created_by.username if ann.created_by else None,
                     }
-                    for ann in ji.project_image.annotations.filter(is_active=True).select_related(
-                        'annotation_class', 'annotation_type'
-                    )
+                    for ann in ji.project_image.active_annotations
                 ]
             }
             for ji in job_images

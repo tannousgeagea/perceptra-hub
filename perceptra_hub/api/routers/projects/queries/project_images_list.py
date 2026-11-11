@@ -19,6 +19,7 @@ from common_utils.image.utils import parse_project_image_query, apply_project_im
 from api.routers.projects.schemas import ProjectImagesResponse
 from images.models import Image
 from jobs.models import JobImage
+from annotations.models import Annotation
 from django.db.models import Count, Prefetch, Q
 from django.contrib.auth import get_user_model
 
@@ -117,8 +118,15 @@ async def list_project_images(
                 'mode'
             ).prefetch_related(
                 'image__tags',
-                'annotations__annotation_class',
-                'annotations__annotation_type',
+                # Active annotations with what each row shows, loaded once for
+                # the page (not one query per image, plus one per author).
+                Prefetch(
+                    'annotations',
+                    queryset=Annotation.objects.filter(is_active=True).select_related(
+                        'annotation_class', 'annotation_type', 'created_by'
+                    ).order_by('id'),
+                    to_attr='active_annotations',
+                ),
                 # Jobs an image is in (the dataset's "open in annotator" action)
                 Prefetch(
                     'job_assignments',
@@ -193,9 +201,7 @@ async def list_project_images(
                             "created_at": ann.created_at.isoformat(),
                             "created_by": ann.created_by.username if ann.created_by else None,
                         }
-                        for ann in pi.annotations.filter(is_active=True).select_related(
-                            'annotation_class', 'annotation_type'
-                        )
+                        for ann in pi.active_annotations
                     ]
                 }
                 for pi in project_images

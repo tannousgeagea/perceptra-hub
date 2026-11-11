@@ -43,6 +43,21 @@ def get_organization_profiles(organization) -> List[ComputeProfile]:
 
 
 @sync_to_async
+def active_job_counts(profile_ids: List[int]) -> Dict[int, int]:
+    """Queued or running training jobs per compute profile, in one query."""
+    from django.db.models import Count
+    from compute.models import TrainingJob
+
+    rows = (
+        TrainingJob.objects
+        .filter(compute_profile_id__in=profile_ids, training_session__status__in=['queued', 'running'])
+        .values('compute_profile_id')
+        .annotate(n=Count('id'))
+    )
+    return {row['compute_profile_id']: row['n'] for row in rows}
+
+
+@sync_to_async
 def create_compute_profile(
     ctx: RequestContext,
     data: ComputeProfileCreateRequest
@@ -405,7 +420,8 @@ async def get_training_recommendations(
     Helps users choose the right compute option.
     """
     profiles = await get_organization_profiles(ctx.organization)
-    
+    busy = await active_job_counts([p.id for p in profiles if p.is_active])
+
     recommendations = []
     for profile in profiles:
         if not profile.is_active:
@@ -438,12 +454,8 @@ async def get_training_recommendations(
                 reason.append("Your cloud resources")
         
         # Check availability
-        from compute.models import TrainingJob
-        active_jobs = TrainingJob.objects.filter(
-            compute_profile=profile,
-            training_session__status__in=['queued', 'running']
-        ).count()
-        
+        active_jobs = busy.get(profile.id, 0)
+
         if active_jobs < profile.max_concurrent_jobs:
             score += 20
             reason.append("Available now")
