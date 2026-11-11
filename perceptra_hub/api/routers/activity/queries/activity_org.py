@@ -605,28 +605,18 @@ async def get_organization_daily_summary(
     def get_summary(ctx:RequestContext):
         cutoff_date = timezone.now().date() - timedelta(days=days)
         
+        # Only the view's real columns: it has no "id", which Django would
+        # otherwise select for model instances.
         summaries = OrgActivitySummary.objects.filter(
             organization=ctx.organization,
             date__gte=cutoff_date
-        ).order_by('-date')[:days]
-        
+        ).order_by('-date').values(*OrgActivitySummaryResponse.model_fields)[:days]
+
         return list(summaries)
-    
-    summaries = await get_summary()
-    
-    return [
-        OrgActivitySummaryResponse(
-            date=s.date,
-            total_events=s.total_events,
-            active_users=s.active_users,
-            annotation_events=s.annotation_events,
-            image_events=s.image_events,
-            annotations_created=s.annotations_created,
-            images_reviewed=s.images_reviewed,
-            images_uploaded=s.images_uploaded
-        )
-        for s in summaries
-    ]
+
+    summaries = await get_summary(ctx)
+
+    return [OrgActivitySummaryResponse(**s) for s in summaries]
 
 
 @router.get(
@@ -668,7 +658,7 @@ async def get_organization_activity_stats(
         )
         return stats
     
-    stats = await get_stats()
+    stats = await get_stats(ctx)
     
     return {
         'organization_id': ctx.organization.id,
