@@ -216,14 +216,14 @@ class ProjectImagesResponse(BaseModel):
     annotated: int
     unannotated: int
     reviewed: int
+    rejected: int = 0      # sent back to the annotator ("needs fixes")
+    dataset: int = 0       # completed: moved to a dataset
     image_ids: Optional[List] = None
     project_image_ids: Optional[List[str]] = None
     images:List[ProjectImage]
-    
+
 class JobImagesResponce(ProjectImagesResponse):
     job: JobSummary
-    rejected: int = 0      # sent back to the annotator ("needs fixes")
-    dataset: int = 0       # completed: moved to a dataset
     marked_null: int = 0
     
    

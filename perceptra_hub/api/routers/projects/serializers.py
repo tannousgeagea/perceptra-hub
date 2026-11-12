@@ -87,16 +87,19 @@ def _thumbnail(project: Project) -> str | None:
         return None
 
 
-def serialize_project(project: Project, user=None) -> ProjectListItem:
+def serialize_project(project: Project, user=None, fallback_role: str = "member") -> ProjectListItem:
     """
     Build a ProjectListItem. Uses the annotations from with_list_data() when
     present; otherwise (a single project fetched elsewhere) queries them.
+
+    fallback_role is shown when the user isn't a project member, e.g. "admin"
+    for an org admin, who has access to every project anyway.
     """
     if not hasattr(project, "stat_images"):
         project = with_list_data(Project.objects.filter(pk=project.pk), user).get()
 
     memberships = getattr(project, "user_memberships", None) or []
-    user_role = memberships[0].role.name if memberships else "member"
+    user_role = memberships[0].role.name if memberships else fallback_role
 
     return ProjectListItem(
         id=project.id,
