@@ -49,11 +49,14 @@ async def get_project_summary(
             is_active=True
         )
         
+        # Images that have reached each stage of the pipeline
+        # (unannotated -> annotated -> reviewed -> dataset), counted from the
+        # same status the dataset page shows, so the two pages agree.
         image_stats = images_qs.aggregate(
             total=Count('id'),
-            annotated=Count('id', filter=Q(annotated=True)),
-            reviewed=Count('id', filter=Q(reviewed=True)),
-            finalized=Count('id', filter=Q(finalized=True)),
+            annotated=Count('id', filter=Q(status__in=['annotated', 'reviewed', 'approved', 'dataset'])),
+            reviewed=Count('id', filter=Q(status__in=['reviewed', 'approved', 'dataset'])),
+            finalized=Count('id', filter=Q(status='dataset')),
             null_marked=Count('id', filter=Q(marked_as_null=True))
         )
         

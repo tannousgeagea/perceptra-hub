@@ -101,8 +101,11 @@ async def list_project_images(
 
         counts = queryset.aggregate(
             annotated_count=Count('id', filter=Q(status='annotated')),
-            reviewed_count=Count('id', filter=Q(status='reviewed')),
-            unannotated_count=Count('id', filter=Q(status='unannotated')),
+            # "approved" is a reviewed image; "in_progress" hasn't been annotated yet.
+            reviewed_count=Count('id', filter=Q(status__in=['reviewed', 'approved'])),
+            unannotated_count=Count('id', filter=Q(status__in=['unannotated', 'in_progress'])),
+            rejected_count=Count('id', filter=Q(status='rejected')),
+            dataset_count=Count('id', filter=Q(status='dataset')),
         )
 
         image_ids = list(queryset.values_list('image__id', flat=True))
@@ -142,6 +145,8 @@ async def list_project_images(
             "annotated": counts["annotated_count"],
             "unannotated": counts["unannotated_count"],
             "reviewed": counts["reviewed_count"],
+            "rejected": counts["rejected_count"],
+            "dataset": counts["dataset_count"],
             "images": [
                 {
                     "id": str(pi.image.id),
