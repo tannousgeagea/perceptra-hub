@@ -89,6 +89,15 @@ def parse_search_query(query: str) -> dict:
     return filters
 
 
+def _active_annotation_count():
+    """An image's live annotations, across the projects it is in."""
+    return models.Count(
+        'project_assignments__annotations',
+        filter=models.Q(project_assignments__annotations__is_active=True),
+        distinct=True,
+    )
+
+
 def apply_image_filters(queryset, filters: dict):
     """
     Apply parsed filters to Image queryset.
@@ -104,16 +113,17 @@ def apply_image_filters(queryset, filters: dict):
     for tag in filters['tags']:
         queryset = queryset.filter(tags__name__iexact=tag)
     
-    # Class filters (assuming you have annotations with classes)
+    # Class filters: an image's annotations live on its project assignments.
     if filters['classes']:
         queryset = queryset.filter(
-            annotations__annotation_class__name__in=filters['classes']
+            project_assignments__annotations__annotation_class__name__in=filters['classes'],
+            project_assignments__annotations__is_active=True,
         ).distinct()
-    
-    # Split filters (assuming ProjectImage has split field)
+
+    # Split filters (train/val/test is the project image's mode)
     if filters['splits']:
         queryset = queryset.filter(
-            project_images__split__in=filters['splits']
+            project_assignments__mode__mode__in=filters['splits']
         ).distinct()
     
     # Filename filter
@@ -133,20 +143,24 @@ def apply_image_filters(queryset, filters: dict):
     if filters['max_height']:
         queryset = queryset.filter(height__lte=filters['max_height'])
     
-    # Annotation count filters
-    if filters['min_annotations']:
-        queryset = queryset.annotate(
-            annotation_count=models.Count('annotations')
-        ).filter(annotation_count__gte=filters['min_annotations'])
-    
-    if filters['max_annotations']:
-        queryset = queryset.annotate(
-            annotation_count=models.Count('annotations')
-        ).filter(annotation_count__lte=filters['max_annotations'])
-    
-    # Job filter
+    # Annotation count filters ("is not None": max-annotations:0 means "no annotations")
+    needs_count = (
+        filters['min_annotations'] is not None
+        or filters['max_annotations'] is not None
+        or filters['sort'] == 'annotations'
+    )
+    if needs_count:
+        queryset = queryset.annotate(annotation_count=_active_annotation_count())
+    if filters['min_annotations'] is not None:
+        queryset = queryset.filter(annotation_count__gte=filters['min_annotations'])
+    if filters['max_annotations'] is not None:
+        queryset = queryset.filter(annotation_count__lte=filters['max_annotations'])
+
+    # Job filter (images are put in jobs through their project assignment)
     if filters['job']:
-        queryset = queryset.filter(annotations__job__name=filters['job']).distinct()
+        queryset = queryset.filter(
+            project_assignments__job_assignments__job__name=filters['job']
+        ).distinct()
     
     # Text search (free text)
     if filters['text_search']:
@@ -168,14 +182,8 @@ def apply_image_filters(queryset, filters: dict):
     }
     
     if filters['sort']:
+        # (annotation_count is already added above when sorting by it)
         sort_field = sort_mapping.get(filters['sort'], '-created_at')
-        
-        # Add annotation count if sorting by it
-        if sort_field == '-annotation_count':
-            queryset = queryset.annotate(
-                annotation_count=models.Count('annotations')
-            )
-        
         queryset = queryset.order_by(sort_field)
     else:
         # Default sort by creation date

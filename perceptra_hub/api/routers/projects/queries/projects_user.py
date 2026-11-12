@@ -12,6 +12,7 @@ from typing import Callable
 from api.dependencies import get_request_context, RequestContext
 from api.routers.projects.schemas import ProjectListItem
 from api.routers.projects.serializers import serialize_project, with_list_data
+from memberships.roles import OrgRole
 import logging
 
 logger = logging.getLogger(__name__)
@@ -30,18 +31,23 @@ class TimedRoute(APIRoute):
 router = APIRouter(route_class=TimedRoute)
 
 @sync_to_async
-def get_user_projects(user: User, organization, include_inactive: bool = False):
-    """Get all projects for user in organization."""
-    projects = Project.objects.filter(
-        organization=organization,
-        is_deleted=False,
-        memberships__user=user,
-    )
+def get_user_projects(user: User, organization, include_inactive: bool = False, org_role: Optional[str] = None):
+    """
+    Projects the user can open in the organization: all of them for org
+    admins/owners (who get access to every project, see
+    projects.resolution.fetch_project_with_access_check), otherwise the ones
+    they're a member of.
+    """
+    sees_all = org_role in (OrgRole.ADMIN, OrgRole.OWNER)
+    projects = Project.objects.filter(organization=organization, is_deleted=False)
+    if not sees_all:
+        projects = projects.filter(memberships__user=user)
     if not include_inactive:
         projects = projects.filter(is_active=True)
     # Membership join can duplicate rows; dedupe by id before annotating.
     projects = Project.objects.filter(pk__in=projects.values("pk")).order_by("-created_at")
-    return [serialize_project(p, user) for p in with_list_data(projects, user)]
+    fallback_role = org_role if sees_all else "member"
+    return [serialize_project(p, user, fallback_role) for p in with_list_data(projects, user)]
 
 
 @router.get("/projects/user/me", response_model=List[ProjectListItem])
@@ -55,6 +61,7 @@ async def get_my_projects(
     Get all projects for the current user in the current organization.
     
     Requires organization ID/slug in header or query parameter.
-    Returns projects where the user is a member.
+    Returns every project for org admins/owners, otherwise the user's projects.
     """
-    return await get_user_projects(ctx.user, ctx.organization, include_inactive)
+    org_role = ctx.role.name if ctx.role else None
+    return await get_user_projects(ctx.user, ctx.organization, include_inactive, org_role)
