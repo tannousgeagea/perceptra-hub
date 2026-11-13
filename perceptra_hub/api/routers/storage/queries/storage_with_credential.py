@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 import logging
 from asgiref.sync import sync_to_async
 
-from api.dependencies import get_request_context, RequestContext
+from api.dependencies import get_request_context, RequestContext, require_permission
 from storage.models import StorageProfile, SecretRef, EncryptedSecret
 from organizations.models import Organization
 from storage.services import (
@@ -273,7 +273,10 @@ def prepare_credentials_dict(
     "/test-connection",
     response_model=TestConnectionResponse,
     summary="Test Storage Connection",
-    description="Test storage connection without saving configuration"
+    description="Test storage connection without saving configuration",
+    # Takes raw credentials and reaches out to the provider: org admins only,
+    # like creating the profile (create_profile_with_credentials).
+    dependencies=[Depends(require_permission('admin'))],
 )
 async def test_storage_connection(
     request: TestConnectionRequest,

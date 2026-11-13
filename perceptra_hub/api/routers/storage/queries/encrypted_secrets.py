@@ -12,7 +12,11 @@ from cryptography.fernet import Fernet
 from asgiref.sync import sync_to_async
 import json
 
-from api.dependencies import RequestContext, get_request_context, require_organization_role
+from api.dependencies import RequestContext, get_request_context, require_organization_role, require_permission
+
+# Routes without an inline ctx.require_role check get it here: secret
+# management is org-admin only.
+ADMIN_ONLY = [Depends(require_permission('admin'))]
 from storage.models import EncryptedSecret, SecretRef
 from organizations.models import Organization
 from django.conf import settings
@@ -207,7 +211,8 @@ async def create_encrypted_secret(
     "/encrypted",
     response_model=List[EncryptedSecretResponse],
     summary="List Encrypted Secrets",
-    description="List all encrypted secrets for the organization"
+    description="List all encrypted secrets for the organization",
+    dependencies=ADMIN_ONLY,
 )
 async def list_encrypted_secrets(
     ctx: RequestContext = Depends(get_request_context),
@@ -248,7 +253,8 @@ async def list_encrypted_secrets(
     "/encrypted/{identifier}",
     response_model=EncryptedSecretResponse,
     summary="Get Encrypted Secret Info",
-    description="Get encrypted secret metadata (WITHOUT decrypted value)"
+    description="Get encrypted secret metadata (WITHOUT decrypted value)",
+    dependencies=ADMIN_ONLY,
 )
 async def get_encrypted_secret(
     identifier: str,
@@ -413,7 +419,8 @@ async def delete_encrypted_secret(
     "/encrypted/{identifier}/create-ref",
     status_code=status.HTTP_201_CREATED,
     summary="Create SecretRef for Encrypted Secret",
-    description="Create a SecretRef that points to this encrypted secret"
+    description="Create a SecretRef that points to this encrypted secret",
+    dependencies=ADMIN_ONLY,
 )
 async def create_secret_ref_for_encrypted(
     identifier: str,
@@ -477,7 +484,8 @@ async def create_secret_ref_for_encrypted(
 @router.post(
     "/encrypted/{identifier}/test",
     summary="Test Encrypted Secret",
-    description="Verify that secret can be decrypted (does NOT return decrypted value)"
+    description="Verify that secret can be decrypted (does NOT return decrypted value)",
+    dependencies=ADMIN_ONLY,
 )
 async def test_encrypted_secret(
     identifier: str,
