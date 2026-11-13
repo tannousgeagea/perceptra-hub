@@ -118,7 +118,11 @@ async def get_user_org_billing_summary(
                 'action_type': item['action_type'],
                 'count': item['count'],
                 'total_amount': float(item['total']),
-                'avg_rate': float(item['avg_rate'])
+                'avg_rate': float(item['avg_rate']),
+                # Same names as BillableActionSummary (report, invoices), which
+                # the console reads for this table.
+                'quantity': item['count'],
+                'unit_rate': float(item['avg_rate']),
             }
             for item in data['breakdown']
         ],
@@ -223,7 +227,11 @@ async def get_user_project_billing_summary(
                 'action_type': item['action_type'],
                 'count': item['count'],
                 'total_amount': float(item['total']),
-                'avg_rate': float(item['avg_rate'])
+                'avg_rate': float(item['avg_rate']),
+                # Same names as BillableActionSummary (report, invoices), which
+                # the console reads for this table.
+                'quantity': item['count'],
+                'unit_rate': float(item['avg_rate']),
             }
             for item in data['breakdown']
         ],

@@ -236,7 +236,7 @@ async def list_invoices(
     end_date: Optional[date] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     List invoices for vendor organization with filters.
@@ -339,7 +339,7 @@ async def list_invoices(
 )
 async def get_invoice(
     invoice_id: UUID,
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """Get detailed information about a specific invoice."""
     @sync_to_async
@@ -395,7 +395,7 @@ async def get_invoice(
 )
 async def issue_invoice(
     invoice_id: UUID,
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     Issue a draft invoice (changes status to PENDING).
@@ -473,7 +473,7 @@ async def mark_invoice_paid(
     invoice_id: UUID,
     payment_date: Optional[datetime] = Body(None, embed=True),
     payment_notes: Optional[str] = Body(None, embed=True),
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     Mark an invoice as paid.
@@ -552,7 +552,7 @@ async def mark_invoice_paid(
 async def cancel_invoice(
     invoice_id: UUID,
     reason: Optional[str] = Body(None, embed=True),
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     Cancel an invoice (only DRAFT or PENDING).

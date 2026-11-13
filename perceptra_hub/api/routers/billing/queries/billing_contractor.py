@@ -30,7 +30,8 @@ async def list_organization_contractors(
     org_id: UUID,
     billing_enabled: Optional[bool] = Query(None),
     has_unbilled_actions: Optional[bool] = Query(None),
-    ctx: RequestContext = Depends(require_permission('write'))
+    # Admin only, like the rest of billing: the list includes unbilled amounts.
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     List all external contractors in organization with billing summary.

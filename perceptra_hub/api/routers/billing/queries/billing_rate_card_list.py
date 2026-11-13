@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from decimal import Decimal
 from uuid import UUID
 from asgiref.sync import sync_to_async
-from api.dependencies import RequestContext, get_request_context
+from api.dependencies import RequestContext, require_permission
 from api.routers.billing.schemas import BillingRateCardOut
 
 router = APIRouter(prefix="/billing")
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/billing")
 async def list_rate_cards(
     project_id: Optional[UUID] = None,
     is_active: Optional[bool] = None,
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     List all billing rate cards for the organization.

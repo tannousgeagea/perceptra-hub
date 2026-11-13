@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from decimal import Decimal
 from asgiref.sync import sync_to_async
 
-from api.dependencies import RequestContext, get_request_context
+from api.dependencies import RequestContext, require_permission
 
 router = APIRouter(prefix="/billing")
 
@@ -15,7 +15,9 @@ class BillableActionSummary(BaseModel):
     action_type: str
     quantity: int
     unit_rate: float
-    total_amount: Decimal
+    # float, not Decimal: Decimal is sent as a JSON string ("1.75"), which the
+    # console formats as a number (as api/routers/billing/schemas.py does).
+    total_amount: float
 
 
 class BillingReport(BaseModel):
@@ -33,7 +35,7 @@ async def get_billing_report(
     user_id: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    ctx:RequestContext = Depends(get_request_context)
+    ctx:RequestContext = Depends(require_permission('admin'))
 ):
     """
     Get billing report for vendor organization.

@@ -110,7 +110,7 @@ async def backfill_entire_organization(
     org_id: UUID,
     start_date: Optional[datetime] = Body(None),
     end_date: Optional[datetime] = Body(None),
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     Backfill all unbilled activities for entire organization.
@@ -140,7 +140,7 @@ async def backfill_entire_organization(
 )
 async def get_backfill_task_status(
     task_id: str,
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     Check the status of a backfill task.

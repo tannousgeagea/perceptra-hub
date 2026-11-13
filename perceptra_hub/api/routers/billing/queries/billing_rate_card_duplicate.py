@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from decimal import Decimal
 from uuid import UUID
 from asgiref.sync import sync_to_async
-from api.dependencies import RequestContext, get_request_context
+from api.dependencies import RequestContext, require_permission
 from api.routers.billing.schemas import BillingRateCardOut
 
 router = APIRouter(prefix="/billing")
@@ -23,7 +23,7 @@ async def duplicate_rate_card(
     rate_card_id: UUID,
     new_name: str = Body(..., embed=True),
     new_project_id: Optional[UUID] = Body(None, embed=True),
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     Duplicate an existing rate card with a new name and optionally different project scope.
