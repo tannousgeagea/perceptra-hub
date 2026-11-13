@@ -64,6 +64,14 @@ class VersionResponse(BaseModel):
     created_at: str
     exported_at: Optional[str]
     created_by: Optional[str]
+    # total_images/total_annotations/*_count above describe the last export
+    # (the file), not the version. These describe the version itself; see
+    # api/routers/versions/export_breakdown.py.
+    images_in_version: Optional[int] = None
+    augmented_images: int = 0
+    not_exported_no_labels: int = 0
+    not_exported_predictions_only: int = 0
+    changed_since_export: bool = False
 
 
 class VersionStatistics(BaseModel):

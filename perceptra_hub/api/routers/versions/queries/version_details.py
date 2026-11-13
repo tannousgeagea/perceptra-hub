@@ -12,6 +12,7 @@ from datetime import datetime
 
 from api.dependencies import get_project_context, ProjectContext
 from api.routers.versions.schemas import VersionCreate, VersionResponse
+from api.routers.versions.export_breakdown import with_export_breakdown, export_breakdown
 from projects.models import Project, ProjectImage, Version, VersionImage
 
 
@@ -33,7 +34,7 @@ async def get_version(
     @sync_to_async
     def fetch_version(project, version_id):
         try:
-            return Version.objects.select_related('created_by').get(
+            return with_export_breakdown(Version.objects.select_related('created_by')).get(
                 version_id=version_id,
                 project=project
             )
@@ -62,7 +63,8 @@ async def get_version(
         is_ready=version.is_ready,
         created_at=version.created_at.isoformat(),
         exported_at=version.exported_at.isoformat() if version.exported_at else None,
-        created_by=version.created_by.username if version.created_by else None
+        created_by=version.created_by.username if version.created_by else None,
+        **export_breakdown(version),
     )
 
 
