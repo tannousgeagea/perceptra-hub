@@ -567,17 +567,24 @@ async def get_organization_activity_trend(
             active_users=Count('user_id', distinct=True)
         ).order_by('date')
         
-        # Format response
+        # Format response: one point per day of the window, quiet days as
+        # zeros, so the chart's days are evenly spaced and gaps show as gaps.
+        by_day = {entry['date']: entry for entry in daily_data}
         trend = []
-        for entry in daily_data:
+        # Local dates, as TruncDate groups by the active time zone.
+        day = timezone.localtime(start_date).date()
+        last_day = timezone.localdate()
+        while day <= last_day:
+            entry = by_day.get(day, {})
             trend.append(ActivityTrendPoint(
-                date=entry['date'].strftime('%b %d'),
-                annotations=entry['annotations'],
-                reviews=entry['reviews'],
-                uploads=entry['uploads'],
-                active_users=entry['active_users']
+                date=day.strftime('%b %d'),
+                annotations=entry.get('annotations') or 0,
+                reviews=entry.get('reviews') or 0,
+                uploads=entry.get('uploads') or 0,
+                active_users=entry.get('active_users') or 0
             ))
-        
+            day += timedelta(days=1)
+
         return trend
     
     return await fetch_activity_trend(ctx.organization, user_id, project_id, days)

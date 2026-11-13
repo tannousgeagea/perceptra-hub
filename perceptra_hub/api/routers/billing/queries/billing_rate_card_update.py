@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from decimal import Decimal
 from uuid import UUID
 from asgiref.sync import sync_to_async
-from api.dependencies import RequestContext, get_request_context
+from api.dependencies import RequestContext, require_permission
 from api.routers.billing.schemas import BillingRateCardOut, BillingRateCardUpdate
 
 router = APIRouter(prefix="/billing")
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/billing")
 async def update_rate_card(
     rate_card_id: UUID,
     rate_card_data: BillingRateCardUpdate,
-    ctx: RequestContext = Depends(get_request_context)
+    ctx: RequestContext = Depends(require_permission('admin'))
 ):
     """
     Update an existing billing rate card (partial update).

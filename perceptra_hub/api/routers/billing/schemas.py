@@ -172,16 +172,18 @@ class UserBillingSummary(BaseModel):
     # Billing status
     is_external_annotator: bool
     billing_enabled: bool
-    hourly_rate: Optional[Decimal]
+    # Amounts as float: Decimal is sent as a JSON string, which the console
+    # formats as a number (.toFixed). Calculations stay Decimal server-side.
+    hourly_rate: Optional[float]
     rate_card_id: Optional[UUID]
     rate_card_name: Optional[str]
-    
+
     # Financial summary
     total_actions: int
-    total_amount: Decimal
-    total_billed: Decimal
-    total_unbilled: Decimal
-    avg_rate: Optional[Decimal]
+    total_amount: float
+    total_billed: float
+    total_unbilled: float
+    avg_rate: Optional[float]
     
     # Breakdown
     action_breakdown: List[Dict[str, Any]]
@@ -195,8 +197,8 @@ class BillableActionDetail(BaseModel):
     action_id: UUID
     action_type: str
     quantity: int
-    unit_rate: Decimal
-    total_amount: Decimal
+    unit_rate: float  # float: see UserBillingSummary
+    total_amount: float
     is_billable: bool
     billed_at: Optional[datetime]
     invoice_number: Optional[str]
