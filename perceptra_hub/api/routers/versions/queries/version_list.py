@@ -12,6 +12,7 @@ from datetime import datetime
 
 from api.dependencies import get_project_context, ProjectContext
 from api.routers.versions.schemas import VersionCreate, VersionResponse
+from api.routers.versions.export_breakdown import with_export_breakdown, export_breakdown
 from projects.models import Project, ProjectImage, Version, VersionImage
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ async def list_versions(
         
         total = queryset.count()
         versions = list(
-            queryset.select_related('created_by')[skip:skip + limit]
+            with_export_breakdown(queryset.select_related('created_by'))[skip:skip + limit]
         )
         
         return {"total": total, "versions": versions}
@@ -66,7 +67,8 @@ async def list_versions(
                 is_ready=v.is_ready,
                 created_at=v.created_at.isoformat(),
                 exported_at=v.exported_at.isoformat() if v.exported_at else None,
-                created_by=v.created_by.username if v.created_by else None
+                created_by=v.created_by.username if v.created_by else None,
+                **export_breakdown(v),
             )
             for v in result["versions"]
         ]

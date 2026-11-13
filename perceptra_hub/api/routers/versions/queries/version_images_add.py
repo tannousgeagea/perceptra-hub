@@ -92,13 +92,17 @@ async def add_images_to_version(
                 
                 added.append(pi.id)
             
-            # Update version counts
-            version_images = VersionImage.objects.filter(version=version)
-            version.total_images = version_images.count()
-            version.total_annotations = sum(vi.annotation_count for vi in version_images)
-            version.train_count = version_images.filter(split='train').count()
-            version.val_count = version_images.filter(split='val').count()
-            version.test_count = version_images.filter(split='test').count()
+            # Once exported, the counts describe the export file: keep them, and
+            # let the save below mark the version as changed since that export
+            # (api/routers/versions/export_breakdown.py). Before that, they
+            # track the version's images.
+            if version.export_status != 'completed':
+                version_images = VersionImage.objects.filter(version=version)
+                version.total_images = version_images.count()
+                version.total_annotations = sum(vi.annotation_count for vi in version_images)
+                version.train_count = version_images.filter(split='train').count()
+                version.val_count = version_images.filter(split='val').count()
+                version.test_count = version_images.filter(split='test').count()
             version.save()
         
         return {"added": len(added), "split": data.split}

@@ -12,6 +12,7 @@ from datetime import datetime
 
 from api.dependencies import get_project_context, ProjectContext
 from api.routers.versions.schemas import VersionStatistics
+from api.routers.versions.export_breakdown import GROUND_TRUTH_SOURCES
 from projects.models import Project, ProjectImage, Version, VersionImage
 
 
@@ -49,11 +50,16 @@ async def get_version_statistics(
         version_images = VersionImage.objects.filter(version=version)
         project_image_ids = list(version_images.values_list('project_image_id', flat=True))
         
-        # Get class distribution
-        class_dist = Annotation.objects.filter(
+        # Get class distribution: the labels the export includes, so the
+        # classes add up to the exported annotations (model predictions only
+        # when the version's export config has include_predictions).
+        class_annotations = Annotation.objects.filter(
             project_image_id__in=project_image_ids,
             is_active=True
-        ).values(
+        )
+        if not (version.export_config or {}).get('include_predictions'):
+            class_annotations = class_annotations.filter(annotation_source__in=GROUND_TRUTH_SOURCES)
+        class_dist = class_annotations.values(
             'annotation_class__name'
         ).annotate(
             count=Count('id')
