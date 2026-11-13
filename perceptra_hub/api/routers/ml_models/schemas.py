@@ -46,6 +46,8 @@ class DatasetInfoResponse(BaseModel):
 class ModelVersionResponse(BaseModel):
     """Response schema for model version"""
     id: str
+    # Internal numeric id: what the validation-images/metrics endpoints take.
+    pk: Optional[int] = None
     version_number: int
     version_name: Optional[str] = None
     status: str

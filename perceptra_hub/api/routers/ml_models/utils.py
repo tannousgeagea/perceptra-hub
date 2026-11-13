@@ -33,6 +33,7 @@ def serialize_model_version(version: ModelVersion) -> dict:
     
     return {
         "id": version.version_id,
+        "pk": version.id,
         "version_number": version.version_number,
         "version_name": version.version_name,
         "status": version.status,

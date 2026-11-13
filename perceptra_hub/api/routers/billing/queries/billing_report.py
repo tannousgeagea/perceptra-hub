@@ -87,9 +87,13 @@ async def get_billing_report(
             for item in breakdown_data
         ]
         
+        # Without dates, the period is the span of the matching actions (today
+        # when nothing matches: earliest()/latest() raise on an empty set).
+        first = actions.order_by('created_at').first()
+        last = actions.order_by('-created_at').first()
         return BillingReport(
-            period_start=start_date or actions.earliest('created_at').created_at.date(),
-            period_end=end_date or actions.latest('created_at').created_at.date(),
+            period_start=start_date or (first.created_at.date() if first else date.today()),
+            period_end=end_date or (last.created_at.date() if last else date.today()),
             total_actions=summary['total_actions'] or 0,
             total_amount=summary['total_amount'] or float('0.00'),
             currency='USD',
