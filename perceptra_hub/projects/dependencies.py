@@ -3,12 +3,13 @@
 # FastAPI dependency functions for project-level authentication.
 # Composes: organizations/dependencies.py + projects/resolution.py + projects/context.py
 
+from typing import Optional
 from uuid import UUID
 
 from fastapi import Depends
 
 from organizations.context import RequestContext
-from organizations.dependencies import get_request_context
+from organizations.dependencies import get_request_context, require_permission
 from projects.context import ProjectContext
 from projects.resolution import fetch_project_with_access_check
 
@@ -52,6 +53,26 @@ async def get_project_context(
         project=project,
         project_role=project_role,
     )
+
+
+async def require_image_write(ctx: RequestContext, project_id: Optional[UUID]):
+    """
+    Adding images (upload, link from storage): the datalake needs "write" in the
+    organization; a project needs "write" in that project (project editor+, or
+    org admin), the same rule as every other project action.
+
+    API keys must also hold the "write" key permission. Returns the project, or
+    None for the datalake. Raises 403/404.
+    """
+    if project_id is None or ctx.api_key:
+        await require_permission("write")(ctx=ctx)
+    if project_id is None:
+        return None
+    project, project_role = await fetch_project_with_access_check(
+        ctx.user, ctx.organization, ctx.role, project_id
+    )
+    ProjectContext(org_ctx=ctx, project=project, project_role=project_role).require_edit_permission()
+    return project
 
 
 async def get_project_context_including_inactive(

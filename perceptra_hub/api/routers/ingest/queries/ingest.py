@@ -4,6 +4,9 @@ Register images by reference (no upload, no copy) — ingest/services.py.
     POST /api/v1/ingest/images          register / update a batch (idempotent)
     POST /api/v1/ingest/images/remove   withdraw registered images (storage untouched)
 
+People: the datalake needs the editor role in the organization; a project
+needs the editor role in that project (or org admin). Same rule as upload.
+
 Machine clients use an API key with scope `ingest:write` (keys without a
 scope list are unrestricted) and write permission; with a project, the key's
 user needs edit access to that project.
@@ -16,9 +19,8 @@ from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from api.dependencies import RequestContext, require_permission, require_scope
-from projects.context import ProjectContext
-from projects.resolution import fetch_project_with_access_check
+from api.dependencies import RequestContext, get_request_context, require_scope
+from projects.dependencies import require_image_write
 
 logger = logging.getLogger(__name__)
 
@@ -91,11 +93,8 @@ class RemoveResponse(BaseModel):
 
 
 async def _project_for(ctx: RequestContext, project_id: Optional[UUID]):
-    if project_id is None:
-        return None
-    project, project_role = await fetch_project_with_access_check(ctx.user, ctx.organization, ctx.role, project_id)
-    ProjectContext(org_ctx=ctx, project=project, project_role=project_role).require_edit_permission()
-    return project
+    # Same rule as upload: org "write" for the datalake, project "write" for a project.
+    return await require_image_write(ctx, project_id)
 
 
 def _source_label(ctx: RequestContext) -> str:
@@ -106,7 +105,7 @@ def _source_label(ctx: RequestContext) -> str:
 @router.post("/images", response_model=IngestResponse, summary="Register images by reference")
 async def ingest_images(
     body: IngestRequest,
-    ctx: RequestContext = Depends(require_permission("write")),
+    ctx: RequestContext = Depends(get_request_context),
     _scope: RequestContext = Depends(require_scope("ingest:write")),
 ):
     from ingest.services import IngestOptions, register_items
@@ -130,7 +129,7 @@ async def ingest_images(
 @router.post("/images/remove", response_model=RemoveResponse, summary="Withdraw images registered by reference")
 async def remove_images(
     body: RemoveRequest,
-    ctx: RequestContext = Depends(require_permission("write")),
+    ctx: RequestContext = Depends(get_request_context),
     _scope: RequestContext = Depends(require_scope("ingest:write")),
 ):
     from ingest.services import remove_items
