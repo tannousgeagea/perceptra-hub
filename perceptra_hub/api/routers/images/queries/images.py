@@ -26,6 +26,9 @@ from organizations.models import Organization
 from django.contrib.auth import get_user_model
 from common_utils.image.utils import parse_search_query, apply_image_filters
 from common_utils.jobs.utils import assign_uploaded_image_to_batch
+from memberships.models import ProjectMembership
+from memberships.roles import project_permissions_for, roles_for_permission
+from projects.models import ProjectImage
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -37,6 +40,76 @@ class BulkDeleteImagesRequest(BaseModel):
     image_ids: List[str] = Field(..., description="List of image IDs to delete")
 
 # ============= Helper Functions =============
+
+# Who may change images:
+# - In the datalake: org editors and up ("write" in the organization).
+# - In a project (upload into it, add or remove its images): "write" in that
+#   project, by the same rule as every other project action
+#   (memberships.roles.project_permissions_for: project editor+, or org admin).
+# - Tags belong to the image itself: org editors, or project editors in a
+#   project that contains the image.
+ORG_EDIT_ROLES = roles_for_permission("write")                      # editor, admin, owner
+PROJECT_EDIT_ROLES = roles_for_permission("write", scope="project")  # editor, admin, owner
+
+
+def require_image_edit_in_project(ctx: RequestContext, project) -> None:
+    """Datalake (project None): org "write". A project: "write" in that project. Raises 403."""
+    if project is None:
+        if ctx.has_role(*ORG_EDIT_ROLES):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires the editor role in the organization",
+        )
+    membership = (
+        ProjectMembership.objects.filter(user=ctx.user, project=project)
+        .select_related("role")
+        .first()
+    )
+    allowed = project_permissions_for(
+        ctx.role.name if ctx.role else None,
+        membership.role.name if membership else None,
+    )
+    if "write" not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires the editor role in this project",
+        )
+
+
+def require_image_edit(ctx: RequestContext, image_pks) -> None:
+    """For tags: org editor+, or project editor+ in a project containing each image. Raises 403."""
+    if ctx.has_role(*ORG_EDIT_ROLES):
+        return
+    image_pks = set(image_pks)
+    editable_projects = ProjectMembership.objects.filter(
+        user=ctx.user, role__name__in=PROJECT_EDIT_ROLES
+    ).values("project")
+    editable = set(
+        ProjectImage.objects.filter(
+            image_id__in=image_pks, project__in=editable_projects, project__is_deleted=False
+        ).values_list("image_id", flat=True)
+    )
+    if not image_pks or not image_pks <= editable:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires an editor role in the organization or in a project containing each image",
+        )
+
+
+@sync_to_async
+def check_upload_allowed(ctx: RequestContext, project_id: Optional[UUID]) -> None:
+    """Uploads: org "write" for the datalake, or "write" in the project when uploading into one."""
+    project = None
+    if project_id:
+        from projects.models import Project
+        project = Project.objects.filter(
+            project_id=project_id, organization=ctx.organization, is_deleted=False
+        ).first()
+        if project is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project {project_id} not found")
+    require_image_edit_in_project(ctx, project)
+
 
 def calculate_checksum(file_data: bytes) -> str:
     """Calculate SHA-256 checksum of file."""
@@ -282,6 +355,8 @@ async def upload_image(
     The image will be stored in the default storage profile unless specified.
     Image metadata will be saved to database for tracking.
     """
+    # Before reading the file: who may upload here (datalake vs project).
+    await check_upload_allowed(ctx, project_id)
     try:
         # Validate file type
         allowed_formats = ['jpg', 'jpeg', 'png', 'tiff', 'tif', 'bmp', 'webp']
@@ -400,7 +475,9 @@ async def batch_upload_images(
     ctx: RequestContext = Depends(get_request_context)
 ):
     """Upload multiple images in a batch."""
-    
+    # Once for the batch, before any file is read (see upload_image).
+    await check_upload_allowed(ctx, project_id)
+
     if len(files) > 50:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -843,13 +920,14 @@ async def add_tags_to_image(
     ctx: RequestContext = Depends(get_request_context)
 ):
     """Add tags to an image."""
-    
+
     try:
         image = Image.objects.get(
             id=image_id,
             organization=ctx.organization
         )
-        
+        require_image_edit(ctx, [image.id])
+
         added_tags = []
         
         for tag_name in tag_names:
@@ -925,6 +1003,9 @@ async def bulk_add_tags_to_images(
                     detail="No matching images found"
                 )
 
+            # Every image must be editable by the caller (org or project editor).
+            require_image_edit(ctx, [img.id for img in images])
+
             # 🧼 Normalize tag names
             cleaned_tag_names = list(
                 {name.strip() for name in tag_names if name.strip()}
@@ -997,13 +1078,14 @@ async def remove_tag_from_image(
     ctx: RequestContext = Depends(get_request_context)
 ):
     """Remove a tag from an image."""
-    
+
     try:
         image = Image.objects.get(
             id=image_id,
             organization=ctx.organization
         )
-        
+        require_image_edit(ctx, [image.id])
+
         tag = Tag.objects.get(
             organization=ctx.organization,
             name=tag_name
@@ -1052,11 +1134,14 @@ async def associate_image_with_project(
             organization=ctx.organization
         )
         
+        # project_id is the project's UUID (Project.project_id), not its pk.
         project = Project.objects.get(
-            id=project_id,
-            organization=ctx.organization
+            project_id=project_id,
+            organization=ctx.organization,
+            is_deleted=False,
         )
-        
+        require_image_edit_in_project(ctx, project)
+
         # Create or update association
         association, created = ProjectImage.objects.get_or_create(
             image=image,
@@ -1110,16 +1195,29 @@ async def disassociate_image_from_project(
             id=image_id,
             organization=ctx.organization
         )
-        
+        # project_id is the project's UUID (Project.project_id); the old
+        # filter compared it with ProjectImage's integer FK and matched nothing.
+        project = Project.objects.get(
+            project_id=project_id,
+            organization=ctx.organization,
+            is_deleted=False,
+        )
+        require_image_edit_in_project(ctx, project)
+
         ProjectImage.objects.filter(
             image=image,
-            project_id=project_id
+            project=project
         ).delete()
-        
+
         logger.info(f"Disassociated image {image_id} from project {project_id}")
-        
+
     except Image.DoesNotExist:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Image {image_id} not found"
+        )
+    except Project.DoesNotExist:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found"
         )

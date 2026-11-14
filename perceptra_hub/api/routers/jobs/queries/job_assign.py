@@ -51,6 +51,7 @@ async def assign_job_to_user(
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
     """Assign job to a user."""
+    project_ctx.require_manage_permission()
     
     @sync_to_async
     def assign_job(project, job_id, assignee_id, user=None):
@@ -124,6 +125,7 @@ async def unassign_job(
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
     """Unassign job (remove assignee)."""
+    project_ctx.require_manage_permission()
     
     @sync_to_async
     def unassign(project, job_id):

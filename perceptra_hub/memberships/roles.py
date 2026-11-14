@@ -111,6 +111,78 @@ PERMISSION_TO_PROJECT_ROLES: Dict[str, FrozenSet[str]] = {
 }
 
 
+# Org roles that pass every project-level check (in every project of the org).
+ORG_ROLES_WITH_PROJECT_BYPASS: FrozenSet[str] = frozenset({OrgRole.ADMIN, OrgRole.OWNER})
+
+
+# ─── Role rows ────────────────────────────────────────────────────────────────
+#
+# Org and project roles share one Role table. Every name here gets a row after
+# `migrate` (see memberships/apps.py), so adding a role is a change to this file only.
+
+ALL_ROLE_NAMES: tuple = tuple(dict.fromkeys(
+    [r.value for r in OrgRole] + [r.value for r in ProjectRole]
+))
+
+ROLE_DESCRIPTIONS: Dict[str, str] = {
+    "viewer":    "Can view images, annotations and results",
+    "operator":  "Can run inference and operational tasks",
+    "annotator": "Can annotate images and mark them done",
+    "reviewer":  "Can review annotations and send images back",
+    "editor":    "Can add and change images, datasets and models",
+    "admin":     "Can manage members, settings and everything editors can",
+    "owner":     "Full control, including deleting and transferring",
+}
+
+
+def project_permissions_for(org_role: str | None, project_role: str | None) -> FrozenSet[str]:
+    """
+    The project permissions a person has, given their org role and their role
+    in the project (None if not a member). Org admins and owners have them all.
+    This is the rule ProjectContext enforces and the console displays.
+    """
+    if org_role in ORG_ROLES_WITH_PROJECT_BYPASS:
+        return frozenset(PERMISSION_TO_PROJECT_ROLES)  # every permission name
+    if not project_role:
+        return frozenset()
+    return frozenset(
+        perm for perm, roles in PERMISSION_TO_PROJECT_ROLES.items() if project_role in roles
+    )
+
+
+def org_permissions_for(org_role: str | None) -> FrozenSet[str]:
+    """The org permissions a person with this org role has."""
+    if not org_role:
+        return frozenset()
+    return frozenset(
+        perm for perm, roles in PERMISSION_TO_ORG_ROLES.items() if org_role in roles
+    )
+
+
+def role_catalog() -> dict:
+    """Roles, their order and the permission matrix, as served to the console."""
+    def roles(enum, rank):
+        return [
+            {"name": r.value, "rank": rank[r], "description": ROLE_DESCRIPTIONS.get(r.value, "")}
+            for r in enum
+        ]
+
+    def names(roles_):
+        # Plain names ("admin"); str() of these enums gives "OrgRole.ADMIN".
+        return sorted(getattr(r, "value", r) for r in roles_)
+
+    def matrix(m):
+        return {perm: names(roles_) for perm, roles_ in m.items()}
+
+    return {
+        "org_roles": roles(OrgRole, ORG_ROLE_RANK),
+        "project_roles": roles(ProjectRole, PROJECT_ROLE_RANK),
+        "org_permissions": matrix(PERMISSION_TO_ORG_ROLES),
+        "project_permissions": matrix(PERMISSION_TO_PROJECT_ROLES),
+        "org_roles_with_project_bypass": names(ORG_ROLES_WITH_PROJECT_BYPASS),
+    }
+
+
 # ─── API key permission → org role mapping ───────────────────────────────────
 #
 # Used in api_keys/auth.py to derive an effective Role from the key's

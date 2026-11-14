@@ -4,7 +4,11 @@ from typing import Optional
 from fastapi import HTTPException, status
 
 from memberships.models import Role
-from memberships.roles import OrgRole, ProjectRole, roles_for_permission
+from memberships.roles import (
+    ORG_ROLES_WITH_PROJECT_BYPASS,
+    ProjectRole,
+    project_permissions_for,
+)
 from organizations.context import RequestContext
 from projects.models import Project
 
@@ -65,7 +69,7 @@ class ProjectContext:
 
     def is_org_admin(self) -> bool:
         """True if user is org admin or owner (bypasses all project role checks)."""
-        return self.has_org_role(OrgRole.ADMIN, OrgRole.OWNER)
+        return self.has_org_role(*ORG_ROLES_WITH_PROJECT_BYPASS)
 
     def require_org_role(self, *role_names: str):
         """Raise 403 if user's org role is not in the given names."""
@@ -101,34 +105,39 @@ class ProjectContext:
             )
 
     # ─── Named permission checks ──────────────────────────────────────────────
+    #
+    # All of these go through memberships.roles.project_permissions_for, the
+    # same function that tells the console what the person may do.
+
+    def permissions(self) -> frozenset:
+        """Every project permission this person has here."""
+        return project_permissions_for(
+            self.org_role.name if self.org_role else None,
+            self.project_role.name if self.project_role else None,
+        )
+
+    def has_permission(self, permission: str) -> bool:
+        return permission in self.permissions()
 
     def can_view(self) -> bool:
         """Any project member or org admin can view."""
-        return self.is_org_admin() or self.is_project_member()
+        return self.has_permission("view")
 
     def can_annotate(self) -> bool:
         """Annotator role or above (or org admin) can create annotations."""
-        return self.is_org_admin() or self.has_project_role(
-            *roles_for_permission("annotate", scope="project")
-        )
+        return self.has_permission("annotate")
 
     def can_review(self) -> bool:
         """Reviewer role or above (or org admin) can review annotations."""
-        return self.is_org_admin() or self.has_project_role(
-            *roles_for_permission("review", scope="project")
-        )
+        return self.has_permission("review")
 
     def can_edit(self) -> bool:
         """Editor role or above (or org admin) can edit project settings and data."""
-        return self.is_org_admin() or self.has_project_role(
-            *roles_for_permission("edit", scope="project")
-        )
+        return self.has_permission("edit")
 
     def can_manage(self) -> bool:
         """Project admin/owner (or org admin) can manage project members."""
-        return self.is_org_admin() or self.has_project_role(
-            *roles_for_permission("manage", scope="project")
-        )
+        return self.has_permission("manage")
 
     # ─── Enforcement methods ──────────────────────────────────────────────────
 

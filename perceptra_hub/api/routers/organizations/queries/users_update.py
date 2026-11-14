@@ -11,10 +11,28 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _org_role(role_name: str) -> Role:
+    """
+    The Role row for an organization role (OrgRole in memberships/roles.py).
+    Project-only roles such as annotator share the Role table but are not valid
+    here; anything outside OrgRole is a 400.
+    """
+    from memberships.roles import OrgRole
+
+    name = (role_name or "").strip().lower()
+    role = Role.objects.filter(name=name).first() if name in {r.value for r in OrgRole} else None
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid role: {role_name}",
+        )
+    return role
+
+
 # ─── Pydantic models ──────────────────────────────────────────────────────────
 
 class UpdateMemberRequest(BaseModel):
-    role: Optional[str] = Field(None, description="New role: owner, admin, annotator, viewer")
+    role: Optional[str] = Field(None, description="New organization role (see GET /roles)")
     status: Optional[str] = Field(None, description="New status: active, inactive, pending, suspended")
 
 
@@ -31,7 +49,7 @@ class UpdateMemberResponse(BaseModel):
 
 class InviteMemberRequest(BaseModel):
     email: str = Field(..., description="Email address of the user to add")
-    role: str = Field("viewer", description="Role to assign: owner, admin, annotator, viewer")
+    role: str = Field("viewer", description="Organization role to assign (see GET /roles)")
 
 
 class InviteMemberResponse(BaseModel):
@@ -84,13 +102,7 @@ def _update_member(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot change your own role as owner",
             )
-        try:
-            new_role = Role.objects.get(name__iexact=new_role_name)
-        except Role.DoesNotExist:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid role: {new_role_name}",
-            )
+        new_role = _org_role(new_role_name)
         if old_role != new_role.name:
             membership.role = new_role
             updates['role'] = new_role
@@ -166,13 +178,7 @@ def _add_member(email: str, role_name: str, organization, requesting_user: User)
             detail="User is already a member of this organization",
         )
 
-    try:
-        role = Role.objects.get(name__iexact=role_name)
-    except Role.DoesNotExist:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid role: {role_name}",
-        )
+    role = _org_role(role_name)
 
     OrganizationMembership.objects.create(
         user=user,

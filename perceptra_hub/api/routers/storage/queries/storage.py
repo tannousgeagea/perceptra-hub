@@ -36,7 +36,14 @@ from api.routers.storage.schemas import (
     StorageStatistics,
     ErrorResponse,
 )
-from api.dependencies import get_current_organization, get_db
+from api.dependencies import get_current_organization, get_db, require_permission
+
+# Role gates, added per route (the organization itself still comes from
+# get_current_organization). Credentials and anything that changes storage:
+# org admins. Reading bucket contents: 'write', like /profiles/{id}/browse.
+# Listing/viewing profiles stays open to members (Link Data needs it).
+ADMIN_ONLY = [Depends(require_permission('admin'))]
+CAN_WRITE = [Depends(require_permission('write'))]
 from storage.models import StorageProfile, SecretRef
 from organizations.models import Organization
 from django.db.models import ProtectedError
@@ -81,7 +88,8 @@ def create_secret_reference(organization: Organization, secret_data: SecretRefCr
     response_model=SecretRefResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create Secret Reference",
-    description="Create a reference to externally stored credentials"
+    description="Create a reference to externally stored credentials",
+    dependencies=ADMIN_ONLY,
 )
 async def create_secret_ref(
     secret_data: SecretRefCreate,
@@ -104,7 +112,8 @@ async def create_secret_ref(
     "/secrets",
     response_model=List[SecretRefResponse],
     summary="List Secret References",
-    description="Get all secret references for the current organization"
+    description="Get all secret references for the current organization",
+    dependencies=ADMIN_ONLY,
 )
 async def list_secret_refs(
     organization=Depends(get_current_organization),
@@ -124,7 +133,8 @@ async def list_secret_refs(
     "/secrets/{secret_id}",
     response_model=SecretRefResponse,
     summary="Get Secret Reference",
-    description="Get a specific secret reference by ID"
+    description="Get a specific secret reference by ID",
+    dependencies=ADMIN_ONLY,
 )
 async def get_secret_ref(
     secret_id: UUID,
@@ -150,7 +160,8 @@ async def get_secret_ref(
     "/secrets/{secret_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete Secret Reference",
-    description="Delete a secret reference (only if not in use)"
+    description="Delete a secret reference (only if not in use)",
+    dependencies=ADMIN_ONLY,
 )
 async def delete_secret_ref(
     secret_id: UUID,
@@ -245,7 +256,8 @@ def create_storage_profile_record(organization: Organization, profile_data: Stor
     response_model=StorageProfileResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create Storage Profile",
-    description="Create a new storage profile for the organization"
+    description="Create a new storage profile for the organization",
+    dependencies=ADMIN_ONLY,
 )
 async def create_storage_profile(
     profile_data: StorageProfileCreate,
@@ -354,7 +366,8 @@ async def get_storage_profile(
     "/profiles/{profile_id}",
     response_model=StorageProfileResponse,
     summary="Update Storage Profile",
-    description="Update an existing storage profile"
+    description="Update an existing storage profile",
+    dependencies=ADMIN_ONLY,
 )
 async def update_storage_profile(
     profile_id: UUID,
@@ -419,7 +432,8 @@ async def update_storage_profile(
     "/profiles/{profile_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete Storage Profile",
-    description="Delete a storage profile"
+    description="Delete a storage profile",
+    dependencies=ADMIN_ONLY,
 )
 async def delete_storage_profile(
     profile_id: UUID,
@@ -453,7 +467,8 @@ async def delete_storage_profile(
     "/profiles/{profile_id}/test-connection",
     response_model=ConnectionTestResponse,
     summary="Test Storage Connection",
-    description="Test connection to a storage profile"
+    description="Test connection to a storage profile",
+    dependencies=ADMIN_ONLY,
 )
 async def test_connection(
     profile_id: UUID,
@@ -493,7 +508,8 @@ async def test_connection(
     "/profiles/{profile_id}/upload",
     response_model=FileUploadResponse,
     summary="Upload File",
-    description="Upload a file to storage profile"
+    description="Upload a file to storage profile",
+    dependencies=ADMIN_ONLY,
 )
 async def upload_file(
     profile_id: UUID,
@@ -549,7 +565,8 @@ async def upload_file(
 @router.get(
     "/profiles/{profile_id}/download/{key:path}",
     summary="Download File",
-    description="Download a file from storage profile"
+    description="Download a file from storage profile",
+    dependencies=CAN_WRITE,
 )
 async def download_file(
     profile_id: UUID,
@@ -614,7 +631,8 @@ async def download_file(
     "/profiles/{profile_id}/list",
     response_model=FileListResponse,
     summary="List Files",
-    description="List files in storage profile"
+    description="List files in storage profile",
+    dependencies=CAN_WRITE,
 )
 async def list_files(
     profile_id: UUID,
@@ -677,7 +695,8 @@ async def list_files(
     "/profiles/{profile_id}/presigned-url",
     response_model=PresignedUrlResponse,
     summary="Generate Presigned URL",
-    description="Generate a presigned URL for temporary file access"
+    description="Generate a presigned URL for temporary file access",
+    dependencies=ADMIN_ONLY,
 )
 async def generate_presigned_url(
     profile_id: UUID,
@@ -731,7 +750,8 @@ async def generate_presigned_url(
     "/profiles/{profile_id}/files",
     response_model=FileDeleteResponse,
     summary="Delete File",
-    description="Delete a file from storage profile"
+    description="Delete a file from storage profile",
+    dependencies=ADMIN_ONLY,
 )
 async def delete_file(
     profile_id: UUID,
