@@ -69,7 +69,12 @@ async def delete_annotation(
     hard_delete: bool = False
 ):
     """Soft or hard delete an annotation."""
-    
+    # Annotators may remove annotations; erasing one for good is an editor's call.
+    if hard_delete:
+        project_ctx.require_edit_permission()
+    else:
+        project_ctx.require_annotate_permission()
+
     @sync_to_async
     def delete_annotation_record(project, annotation_id, hard_delete, user):
         try:

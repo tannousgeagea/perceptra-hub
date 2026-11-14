@@ -48,6 +48,7 @@ async def delete_job(
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
     """Delete a job from a project (soft delete by default)."""
+    project_ctx.require_manage_permission()
 
     @sync_to_async
     def delete_job_record(project, job_id, hard_delete: bool, user=None):

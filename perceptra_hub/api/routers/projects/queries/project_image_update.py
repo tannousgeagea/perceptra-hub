@@ -69,9 +69,14 @@ def _apply_review(project_image, approved: bool, feedback: Optional[str], user, 
 
 
 def _check_review_request(project_ctx: ProjectContext, approved: bool, feedback: Optional[str]) -> Optional[str]:
-    """Rejecting needs review permission and a reason; returns the cleaned reason."""
+    """
+    Approving is the annotator's "done" step (annotate permission). Rejecting
+    needs review permission and a reason. Returns the cleaned reason.
+    """
     feedback = (feedback or '').strip() or None
-    if not approved:
+    if approved:
+        project_ctx.require_annotate_permission()
+    else:
         project_ctx.require_review_permission()
         if not feedback:
             raise HTTPException(
@@ -288,7 +293,8 @@ async def mark_image_as_null(
     Null images are kept active for training as negative samples.
     All existing annotations will be soft-deleted when marked as null.
     """
-    
+    project_ctx.require_annotate_permission()
+
     @sync_to_async
     def mark_null(project, project_image_id, is_null, reason, user):
         from django.utils import timezone
@@ -348,6 +354,8 @@ async def bulk_mark_images_as_null(
     reason: Optional[str] = Body(None, description="Optional reason/notes"),
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
+    project_ctx.require_annotate_permission()
+
     @sync_to_async
     def bulk_mark_null(project, image_ids, is_null, reason, user):
         from django.utils import timezone
@@ -426,6 +434,7 @@ async def finalize_for_dataset(
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
     """Mark project image as finalized and ready for dataset."""
+    project_ctx.require_review_permission()
     
     @sync_to_async
     def finalize_image(project, project_image_id):
@@ -642,6 +651,7 @@ async def batch_finalize_images(
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
     """Batch finalize multiple images for dataset."""
+    project_ctx.require_review_permission()
     
     @sync_to_async
     def batch_finalize(project, image_ids):

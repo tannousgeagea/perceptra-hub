@@ -60,7 +60,8 @@ async def split_job_into_slices(
     - Assigns users if provided
     - Marks original job as 'sliced'
     """
-    
+    project_ctx.require_manage_permission()
+
     @sync_to_async
     def split_job(project, job_id, data, user=None):
         from jobs.models import Job, JobImage

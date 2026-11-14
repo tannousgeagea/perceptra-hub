@@ -38,7 +38,8 @@ async def add_images_to_project(
     project_ctx:ProjectContext = Depends(get_project_context),
 ):
     """Add images to project and optionally assign to job."""
-    
+    project_ctx.require_edit_permission()
+
     @sync_to_async
     def add_images(org, project, data, user):
                 

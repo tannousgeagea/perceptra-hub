@@ -38,7 +38,8 @@ async def create_annotation(
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
     """Create a new annotation for a project image."""
-    
+    project_ctx.require_annotate_permission()
+
     @sync_to_async
     def create_annotation_record(project, project_image_id, data, user):
         # Get project image
@@ -183,7 +184,8 @@ async def batch_create_annotations(
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
     """Create multiple annotations for a project image at once."""
-    
+    project_ctx.require_annotate_permission()
+
     results = []
     for ann_data in data.annotations:
         result = await create_annotation(

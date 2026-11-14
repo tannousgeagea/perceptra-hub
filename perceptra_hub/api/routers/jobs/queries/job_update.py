@@ -54,7 +54,15 @@ async def update_job(
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
     """Update job details."""
-    
+    # Renaming or reassigning a job is a project admin's call. The status alone
+    # may also be moved by a reviewer, or by the job's assignee (an annotator).
+    changes_details = any(v is not None for v in (data.name, data.description, data.assignee_id))
+    if changes_details:
+        project_ctx.require_manage_permission()
+    only_if_assignee = not changes_details and not project_ctx.can_review()
+    if only_if_assignee:
+        project_ctx.require_annotate_permission()
+
     @sync_to_async
     def update_job_record(project, job_id, data, user=None):        
         # Get job
@@ -68,7 +76,13 @@ async def update_job(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Job not found"
             )
-        
+
+        if only_if_assignee and job.assignee_id != getattr(user, "id", None):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the job's assignee or a reviewer can change its status",
+            )
+
         # Update fields if provided
         if data.name is not None:
             job.name = data.name
