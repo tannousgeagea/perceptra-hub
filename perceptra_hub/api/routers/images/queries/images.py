@@ -27,7 +27,7 @@ from django.contrib.auth import get_user_model
 from common_utils.image.utils import parse_search_query, apply_image_filters
 from common_utils.jobs.utils import assign_uploaded_image_to_batch
 from memberships.models import ProjectMembership
-from memberships.roles import roles_for_permission
+from memberships.roles import project_permissions_for, roles_for_permission
 from projects.models import ProjectImage
 
 User = get_user_model()
@@ -41,29 +41,40 @@ class BulkDeleteImagesRequest(BaseModel):
 
 # ============= Helper Functions =============
 
-# Who may change images. Org editors and up may change any image in the
-# organization; anyone else needs an editor-or-higher role in the project the
-# change concerns. (Org admins/owners are in the org set.)
+# Who may change images:
+# - In the datalake: org editors and up ("write" in the organization).
+# - In a project (upload into it, add or remove its images): "write" in that
+#   project, by the same rule as every other project action
+#   (memberships.roles.project_permissions_for: project editor+, or org admin).
+# - Tags belong to the image itself: org editors, or project editors in a
+#   project that contains the image.
 ORG_EDIT_ROLES = roles_for_permission("write")                      # editor, admin, owner
 PROJECT_EDIT_ROLES = roles_for_permission("write", scope="project")  # editor, admin, owner
 
 
 def require_image_edit_in_project(ctx: RequestContext, project) -> None:
-    """Org editor+, or project editor+ in `project` (None: org editor+ only). Raises 403."""
-    if ctx.has_role(*ORG_EDIT_ROLES):
-        return
-    if project is not None and ProjectMembership.objects.filter(
-        user=ctx.user, project=project, role__name__in=PROJECT_EDIT_ROLES
-    ).exists():
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail=(
-            "Requires an editor role in this project or in the organization"
-            if project is not None
-            else "Requires an editor role in the organization"
-        ),
+    """Datalake (project None): org "write". A project: "write" in that project. Raises 403."""
+    if project is None:
+        if ctx.has_role(*ORG_EDIT_ROLES):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires the editor role in the organization",
+        )
+    membership = (
+        ProjectMembership.objects.filter(user=ctx.user, project=project)
+        .select_related("role")
+        .first()
     )
+    allowed = project_permissions_for(
+        ctx.role.name if ctx.role else None,
+        membership.role.name if membership else None,
+    )
+    if "write" not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires the editor role in this project",
+        )
 
 
 def require_image_edit(ctx: RequestContext, image_pks) -> None:
@@ -88,7 +99,7 @@ def require_image_edit(ctx: RequestContext, image_pks) -> None:
 
 @sync_to_async
 def check_upload_allowed(ctx: RequestContext, project_id: Optional[UUID]) -> None:
-    """Uploads: org editor+ (datalake), or project editor+ when uploading into a project."""
+    """Uploads: org "write" for the datalake, or "write" in the project when uploading into one."""
     project = None
     if project_id:
         from projects.models import Project
