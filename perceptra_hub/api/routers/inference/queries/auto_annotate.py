@@ -10,7 +10,8 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
-from api.dependencies import get_current_user
+from api.dependencies import RequestContext, get_request_context
+from projects.dependencies import require_project_permission
 from api.tasks.auto_annotate import auto_annotate_images
 from common_utils.progress.core import track_progress
 from ml_models.models import ModelVersion
@@ -40,21 +41,23 @@ def trigger_auto_annotation(
     project_id: int,
     body: AutoAnnotateRequest,
     x_request_id: Annotated[Optional[str], Header()] = None,
-    user=Depends(get_current_user),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """
     Queue model inference on the given images and persist predictions as annotations.
 
     The task runs asynchronously on the `auto_annotate` worker queue.
     Use X-Request-ID as the task_id to poll progress via /api/v1/progress/{task_id}.
+    Needs the editor role in the project (or org admin).
     """
     try:
-        Project.objects.get(id=project_id)
+        project = Project.objects.get(id=project_id, organization=ctx.organization, is_deleted=False)
     except Project.DoesNotExist:
         raise HTTPException(status_code=404, detail="Project not found")
+    require_project_permission(ctx, project, "edit", "Auto-annotating")
 
     try:
-        ModelVersion.objects.get(version_id=body.model_version_id)
+        ModelVersion.objects.get(version_id=body.model_version_id, model__organization=ctx.organization)
     except ModelVersion.DoesNotExist:
         raise HTTPException(status_code=404, detail="Model version not found")
 

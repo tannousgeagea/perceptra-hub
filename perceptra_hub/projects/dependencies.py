@@ -75,6 +75,41 @@ async def require_image_write(ctx: RequestContext, project_id: Optional[UUID]):
     return project
 
 
+_ROLE_FOR_PERMISSION = {
+    "annotate": "annotator", "review": "reviewer", "edit": "editor",
+    "write": "editor", "manage": "admin", "admin": "admin",
+}
+
+
+def require_project_permission(ctx: RequestContext, project, permission: str, what: str = "This action") -> None:
+    """
+    Raise 403 unless the person has `permission` in `project` — for objects that
+    belong to a project but are reached by their own id (models, versions…).
+    Same rule as ProjectContext (memberships.roles.project_permissions_for):
+    org admins and owners pass everywhere. Synchronous: call it from sync code
+    or through sync_to_async.
+    """
+    from memberships.models import ProjectMembership
+    from memberships.roles import project_permissions_for
+
+    project_role = None
+    if project is not None and ctx.user is not None:
+        membership = (
+            ProjectMembership.objects.filter(user=ctx.user, project=project)
+            .select_related("role")
+            .first()
+        )
+        project_role = membership.role.name if membership else None
+    allowed = project_permissions_for(ctx.role.name if ctx.role else None, project_role)
+    if permission not in allowed:
+        from fastapi import HTTPException, status
+        role = _ROLE_FOR_PERMISSION.get(permission, permission)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{what} needs the {role} role or above in the project",
+        )
+
+
 async def get_project_context_including_inactive(
     project_id: UUID,
     ctx: RequestContext = Depends(get_request_context),

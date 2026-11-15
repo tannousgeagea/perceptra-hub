@@ -11,6 +11,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 
 from api.dependencies import get_request_context, RequestContext
+from memberships.roles import roles_for_permission
 from compute.models import Agent, AgentAPIKey, ComputeProvider
 from compute.services.agent_manager import AgentManager
 from django.db.models import Q
@@ -31,7 +32,13 @@ async def register_agent(
     """
     Register a new on-premise agent.
     Returns API key (only shown once!) and install command.
+    Org admins only: the agent's key receives training jobs and datasets.
     """
+    if not ctx.has_role(*roles_for_permission("admin")):
+        raise HTTPException(
+            status_code=403,
+            detail="Registering a compute agent needs the admin role in the organization",
+        )
     # Convert Pydantic models to dicts
     gpu_info = [gpu.model_dump() for gpu in request.gpu_info]
     system_info = request.system_info.model_dump()

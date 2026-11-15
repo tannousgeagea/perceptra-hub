@@ -21,6 +21,7 @@ from api.dependencies import (
 from api.routers.ml_models.utils import serialize_model_detail, get_model_by_id
 from api.routers.ml_models.schemas import ModelCreateRequest, ModelDetailResponse, ModelUpdateRequest
 from asgiref.sync import sync_to_async
+from projects.dependencies import require_project_permission
 
 
 router = APIRouter(
@@ -60,16 +61,9 @@ async def delete_model(
     Delete model (soft delete).
     Cannot delete if model has active versions.
     
-    Requires: Organization admin or model creator
+    Requires: the admin role in the model's project (or org admin).
     """
     model = await get_model_by_id(model_id, ctx.organization)
-    
-    # Check permissions
-    if not ctx.has_role('admin', 'owner'):
-        if model.created_by and model.created_by.id != ctx.user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only model creator or organization admin can delete"
-            )
-    
+    await sync_to_async(require_project_permission)(ctx, model.project, "manage", "Deleting a model")
+
     await delete_model_from_db(model, ctx.user)

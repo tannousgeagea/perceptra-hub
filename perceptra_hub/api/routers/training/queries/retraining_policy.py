@@ -13,8 +13,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from api.dependencies import get_current_user
+from api.dependencies import RequestContext, get_request_context
 from ml_models.models import Model
+from projects.dependencies import require_project_permission
 from training.models import RetrainingPolicy
 
 router = APIRouter()
@@ -45,11 +46,16 @@ class RetrainingPolicyUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
-def _model_or_404(model_id: str):
+def _model_or_404(model_id: str, ctx: RequestContext, permission: str = "edit"):
+    """The model, if it is in the caller's organization and they hold `permission` in its project."""
     try:
-        return Model.objects.get(model_id=model_id)
+        model = Model.objects.select_related("project").get(
+            model_id=model_id, organization=ctx.organization
+        )
     except Model.DoesNotExist:
         raise HTTPException(status_code=404, detail="Model not found")
+    require_project_permission(ctx, model.project, permission, "Managing retraining policies")
+    return model
 
 
 def _policy_to_dict(p: RetrainingPolicy) -> dict:
@@ -72,8 +78,9 @@ def _policy_to_dict(p: RetrainingPolicy) -> dict:
 
 
 @router.post("/models/{model_id}/retraining-policies", status_code=status.HTTP_201_CREATED)
-def create_policy(model_id: str, body: RetrainingPolicyCreate, user=Depends(get_current_user)):
-    model = _model_or_404(model_id)
+def create_policy(model_id: str, body: RetrainingPolicyCreate, ctx: RequestContext = Depends(get_request_context)):
+    user = ctx.user
+    model = _model_or_404(model_id, ctx)
 
     compute_profile = None
     if body.compute_profile_id:
@@ -103,17 +110,17 @@ def create_policy(model_id: str, body: RetrainingPolicyCreate, user=Depends(get_
 
 
 @router.get("/models/{model_id}/retraining-policies")
-def list_policies(model_id: str, user=Depends(get_current_user)):
-    model = _model_or_404(model_id)
+def list_policies(model_id: str, ctx: RequestContext = Depends(get_request_context)):
+    model = _model_or_404(model_id, ctx, "view")
     policies = RetrainingPolicy.objects.filter(model=model).order_by("-created_at")
     return {"count": policies.count(), "results": [_policy_to_dict(p) for p in policies]}
 
 
 @router.patch("/models/{model_id}/retraining-policies/{policy_id}")
 def update_policy(
-    model_id: str, policy_id: str, body: RetrainingPolicyUpdate, user=Depends(get_current_user)
+    model_id: str, policy_id: str, body: RetrainingPolicyUpdate, ctx: RequestContext = Depends(get_request_context)
 ):
-    model = _model_or_404(model_id)
+    model = _model_or_404(model_id, ctx)
     try:
         policy = RetrainingPolicy.objects.get(policy_id=policy_id, model=model)
     except RetrainingPolicy.DoesNotExist:
@@ -139,17 +146,17 @@ def update_policy(
 
 
 @router.delete("/models/{model_id}/retraining-policies/{policy_id}", status_code=204)
-def delete_policy(model_id: str, policy_id: str, user=Depends(get_current_user)):
-    model = _model_or_404(model_id)
+def delete_policy(model_id: str, policy_id: str, ctx: RequestContext = Depends(get_request_context)):
+    model = _model_or_404(model_id, ctx)
     deleted, _ = RetrainingPolicy.objects.filter(policy_id=policy_id, model=model).delete()
     if not deleted:
         raise HTTPException(status_code=404, detail="Policy not found")
 
 
 @router.post("/models/{model_id}/retraining-policies/{policy_id}/trigger")
-def manually_trigger_policy(model_id: str, policy_id: str, user=Depends(get_current_user)):
+def manually_trigger_policy(model_id: str, policy_id: str, ctx: RequestContext = Depends(get_request_context)):
     """Force-fire a retraining policy regardless of its threshold conditions."""
-    model = _model_or_404(model_id)
+    model = _model_or_404(model_id, ctx)
     try:
         policy = RetrainingPolicy.objects.get(policy_id=policy_id, model=model)
     except RetrainingPolicy.DoesNotExist:

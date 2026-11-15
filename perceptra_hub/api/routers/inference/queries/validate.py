@@ -6,6 +6,7 @@ from fastapi import Header
 from fastapi import APIRouter, Depends, HTTPException
 from api.dependencies import RequestContext, get_request_context
 from ml_models.models import ModelVersion
+from projects.dependencies import require_project_permission
 from projects.models import VersionImage, ImageMode
 from inferences.models import PredictionImageResult, PredictionOverlay
 from common_utils.inference.utils import run_inference
@@ -26,10 +27,18 @@ def validate_model(
     track_progress(task_id=task_id, percentage=0, message="Initiating Validation ...", status="pending")
     try:
         try:
-            model_version = ModelVersion.objects.get(id=model_version_id, model__organization=ctx.organization)
+            model_version = ModelVersion.objects.select_related("model__project").get(
+                id=model_version_id, model__organization=ctx.organization
+            )
         except ModelVersion.DoesNotExist:
             track_progress(task_id=task_id, percentage=0, message=f"Failed: Model Version not Found", status="failed")
             raise HTTPException(status_code=404, detail="Model version not found")
+        # Validation runs the model and stores its predictions: project editor+.
+        try:
+            require_project_permission(ctx, model_version.model.project, "edit", "Validating a model")
+        except HTTPException:
+            track_progress(task_id=task_id, percentage=0, message="Failed: not allowed", status="failed")
+            raise
 
         version = model_version.dataset_version
         mode = ImageMode.objects.get(mode="valid")
