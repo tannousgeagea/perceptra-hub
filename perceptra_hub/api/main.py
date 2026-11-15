@@ -35,7 +35,9 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         openapi_tags = tags_meta,
-        debug=True,
+        # Debug mode sends Python tracebacks to the caller on a crash; off
+        # unless API_DEBUG=true. Errors are logged by setup_exception_handlers.
+        debug=os.getenv("API_DEBUG", "false").lower() == "true",
         title="Data Upload data entrypoint API",
         summary="",
         version="0.0.1",

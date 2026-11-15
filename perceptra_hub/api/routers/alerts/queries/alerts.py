@@ -11,17 +11,23 @@ from temporal_analysis.models import MetricAlert
 from projects.models import Project
 from api.routers.alerts.schemas import AlertResponse, AlertStats, AcknowledgeRequest
 from api.dependencies import RequestContext, get_request_context
+from projects.dependencies import require_project_permission
 
 
 router = APIRouter(prefix="/alerts",)
 
 
 def _org_project(ctx: RequestContext, project_id: int) -> Project:
-    """The project, if it belongs to the caller's organization (404 otherwise)."""
+    """
+    The project, if it belongs to the caller's organization (404 otherwise)
+    and the caller may see it: a project member, or an org admin (403).
+    """
     try:
-        return Project.objects.get(id=project_id, organization=ctx.organization, is_deleted=False)
+        project = Project.objects.get(id=project_id, organization=ctx.organization, is_deleted=False)
     except Project.DoesNotExist:
         raise HTTPException(status_code=404, detail="Project not found")
+    require_project_permission(ctx, project, "view", "Viewing alerts")
+    return project
 
 
 # ============================================================================
@@ -133,6 +139,8 @@ def acknowledge_alert(
         )
     except MetricAlert.DoesNotExist:
         raise HTTPException(status_code=404, detail="Alert not found")
+
+    require_project_permission(ctx, alert.project, "review", "Acknowledging an alert")
 
     # The acknowledger is whoever is signed in; a name in the body is ignored.
     user = ctx.effective_user

@@ -4,17 +4,21 @@ Metric Alerts and Thresholds API
 GET  /temporal/projects/{project_id}/alerts
 POST /temporal/projects/{project_id}/alerts/{alert_id}/acknowledge
 GET  /temporal/projects/{project_id}/thresholds
+
+project_id is the project's UUID. Viewing needs project membership (or org
+admin), like the rest of Evaluation; acknowledging needs the reviewer role.
 """
 
 from datetime import datetime
 from typing import List, Optional
 
+from asgiref.sync import sync_to_async
 from django.utils import timezone
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel
 
-from api.dependencies import RequestContext, get_request_context
-from projects.models import Project
+from projects.context import ProjectContext
+from projects.dependencies import get_project_context
 from temporal_analysis.alerts import AlertRuleEngine
 from temporal_analysis.models import MetricAlert
 
@@ -54,20 +58,16 @@ class ThresholdResponse(BaseModel):
     summary="List metric alerts for a project",
 )
 async def list_project_alerts(
-    project_id: int = Path(...),
     acknowledged: Optional[bool] = Query(None, description="Filter by acknowledgment status"),
     limit: int = Query(50, ge=1, le=200),
-    ctx: RequestContext = Depends(get_request_context),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
-    try:
-        Project.objects.get(id=project_id, is_deleted=False)
-    except Project.DoesNotExist:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    qs = MetricAlert.objects.filter(project_id=project_id).order_by("-alert_date")
-
-    if acknowledged is not None:
-        qs = qs.filter(is_acknowledged=acknowledged)
+    @sync_to_async
+    def _alerts():
+        qs = MetricAlert.objects.filter(project=project_ctx.project).order_by("-alert_date")
+        if acknowledged is not None:
+            qs = qs.filter(is_acknowledged=acknowledged)
+        return list(qs[:limit])
 
     return [
         AlertResponse(
@@ -83,7 +83,7 @@ async def list_project_alerts(
             alert_date=a.alert_date,
             acknowledged_at=a.acknowledged_at,
         )
-        for a in qs[:limit]
+        for a in await _alerts()
     ]
 
 
@@ -93,20 +93,23 @@ async def list_project_alerts(
     summary="Acknowledge a metric alert",
 )
 async def acknowledge_alert(
-    project_id: int = Path(...),
     alert_id: int = Path(...),
-    ctx: RequestContext = Depends(get_request_context),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
-    try:
-        alert = MetricAlert.objects.get(id=alert_id, project_id=project_id)
-    except MetricAlert.DoesNotExist:
-        raise HTTPException(status_code=404, detail="Alert not found")
+    project_ctx.require_review_permission()
 
-    alert.is_acknowledged = True
-    alert.acknowledged_at = timezone.now()
-    alert.acknowledged_by = ctx.effective_user
-    alert.save(update_fields=["is_acknowledged", "acknowledged_at", "acknowledged_by"])
+    @sync_to_async
+    def _acknowledge():
+        try:
+            alert = MetricAlert.objects.get(id=alert_id, project=project_ctx.project)
+        except MetricAlert.DoesNotExist:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        alert.is_acknowledged = True
+        alert.acknowledged_at = timezone.now()
+        alert.acknowledged_by = project_ctx.effective_user
+        alert.save(update_fields=["is_acknowledged", "acknowledged_at", "acknowledged_by"])
 
+    await _acknowledge()
     return AcknowledgeResponse(id=alert_id, is_acknowledged=True)
 
 
@@ -116,8 +119,7 @@ async def acknowledge_alert(
     summary="Get default alert thresholds",
 )
 async def get_thresholds(
-    project_id: int = Path(...),
-    ctx: RequestContext = Depends(get_request_context),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
     return [
         ThresholdResponse(
