@@ -39,8 +39,25 @@ import django
 django.setup()
 
 from api.dependencies import RequestContext, get_request_context
+from memberships.roles import roles_for_permission
+from projects.dependencies import require_project_permission
 
 logger = logging.getLogger(__name__)
+
+
+def _require_scan_write(ctx: RequestContext, project, what: str) -> None:
+    """
+    Changing a scan or its results: the editor role where the scan looks.
+    A project scan follows the project role; a datalake scan the org role.
+    Synchronous (the project lookup hits the DB).
+    """
+    if project is not None:
+        require_project_permission(ctx, project, "edit", what)
+    elif not ctx.has_role(*roles_for_permission("write")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{what} needs the editor role or above in the organization",
+        )
 
 router = APIRouter(prefix="/similarity", tags=["Similarity"])
 
@@ -255,7 +272,8 @@ async def create_scan(
     """
     Launch a similarity scan.
 
-    Requires annotator role or above.
+    Requires the editor role: in the project for a project scan, in the
+    organization for a datalake scan.
     Only one PENDING/RUNNING scan per organization per scope is allowed
     at a time to prevent resource exhaustion.
     """
@@ -285,6 +303,8 @@ async def create_scan(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Project {payload.project_id} not found",
                 )
+
+        _require_scan_write(ctx, project, "Starting a similarity scan")
 
         try:
             scan = svc_create_scan(
@@ -407,6 +427,8 @@ async def cancel_scan(
                 detail=f"Scan {scan_id} not found",
             )
 
+        _require_scan_write(ctx, scan.project, "Cancelling a similarity scan")
+
         try:
             return svc_cancel(scan, user=ctx.user)
         except ValueError as exc:
@@ -452,6 +474,8 @@ async def recluster_scan_endpoint(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Scan {scan_id} not found",
             )
+
+        _require_scan_write(ctx, scan.project, "Re-running a similarity scan")
 
         try:
             return svc_recluster(scan, new_similarity_threshold=payload.similarity_threshold)
@@ -668,6 +692,10 @@ async def cluster_action(
                 detail=f"Cluster {cluster_id} not found",
             )
 
+        # delete_duplicates was checked above (org admin); the rest follow the scan.
+        if payload.action != "delete_duplicates":
+            _require_scan_write(ctx, cluster.scan.project, "Acting on similarity results")
+
         try:
             return action_cluster(
                 cluster=cluster,
@@ -716,7 +744,18 @@ async def bulk_cluster_action(
 
     @sync_to_async
     def _bulk(payload, ctx):
+        from similarity.models import SimilarityScan
         from similarity.services.similarity_scan import bulk_action_clusters
+
+        # delete_duplicates was checked above (org admin); the rest follow each
+        # cluster's scan, so every scan the clusters come from must allow it.
+        if payload.action != "delete_duplicates":
+            scans = SimilarityScan.objects.filter(
+                organization=ctx.organization,
+                clusters__cluster_id__in=payload.cluster_ids,
+            ).select_related("project").distinct()
+            for scan in scans:
+                _require_scan_write(ctx, scan.project, "Acting on similarity results")
 
         try:
             return bulk_action_clusters(
