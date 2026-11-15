@@ -7,10 +7,12 @@ from typing import Optional, List
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 
+from asgiref.sync import sync_to_async
+
 from temporal_analysis.models import MetricSnapshot, MetricAlert
-from projects.models import Project
 from api.routers.temporal.schemas import TemporalResponse, TrendPoint, TrendAnalysis, SnapshotResponse
-from api.dependencies import RequestContext, get_request_context
+from projects.context import ProjectContext
+from projects.dependencies import get_project_context
 
 router = APIRouter(prefix="/temporal",)
 
@@ -24,22 +26,22 @@ router = APIRouter(prefix="/temporal",)
     summary="Get performance trends over time"
 )
 async def get_project_trends(
-    project_id: int = Path(...),
     days: int = Query(30, ge=1, le=365, description="Lookback period in days"),
     model_version_id: Optional[int] = Query(None, description="Filter by model version"),
-    ctx: RequestContext = Depends(get_request_context),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
     """
     Get time-series performance trends.
     Returns daily snapshots for the specified period.
+    Needs project membership (or org admin); project_id is the project's UUID.
     """
-    
-    # Verify project exists
-    try:
-        project = Project.objects.get(id=project_id, is_deleted=False)
-    except Project.DoesNotExist:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
+    return await sync_to_async(_build_trends)(project_ctx.project, days, model_version_id)
+
+
+def _build_trends(project, days: int, model_version_id: Optional[int]) -> TemporalResponse:
+    """The trends response (sync: runs the ORM queries)."""
+    project_id = project.id
+
     # Get snapshots
     start_date = datetime.utcnow() - timedelta(days=days)
     
@@ -125,16 +127,20 @@ async def get_project_trends(
     summary="Get all snapshots for a project"
 )
 async def get_project_snapshots(
-    project_id: int = Path(...),
     limit: int = Query(100, ge=1, le=500),
-    ctx: RequestContext = Depends(get_request_context),
+    project_ctx: ProjectContext = Depends(get_project_context),
 ):
-    """Get list of all metric snapshots"""
-    
-    snapshots = MetricSnapshot.objects.filter(
-        project_id=project_id
-    ).select_related('model_version').order_by('-snapshot_date')[:limit]
-    
+    """Get list of all metric snapshots (project membership or org admin)."""
+
+    @sync_to_async
+    def _snapshots():
+        return list(
+            MetricSnapshot.objects.filter(project=project_ctx.project)
+            .select_related('model_version').order_by('-snapshot_date')[:limit]
+        )
+
+    snapshots = await _snapshots()
+
     return [
         SnapshotResponse(
             id=s.id,

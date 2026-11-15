@@ -40,7 +40,9 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         openapi_tags=tags_metadata,
-        debug=True,
+        # Debug mode sends Python tracebacks to the caller on a crash; off
+        # unless API_DEBUG=true.
+        debug=os.getenv("API_DEBUG", "false").lower() == "true",
         title="Asynchronous tasks processing with Celery and RabbitMQ",
         summary="",
         version="0.0.1",
