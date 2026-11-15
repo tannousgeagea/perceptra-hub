@@ -13,8 +13,8 @@ from api.routers.suggestions.dependencies import get_segmentation_service
 router = APIRouter(prefix="/projects")
 
 # Dependency
-def get_suggestion_service() -> SuggestionService:
-    return SuggestionService()
+# Shared dependency: also requires annotator or above in the project.
+from api.routers.suggestions.dependencies import get_suggestion_service  # noqa: E402
 
 @router.post(
     "/{project_id}/images/{image_id}/suggestions/segment/text",

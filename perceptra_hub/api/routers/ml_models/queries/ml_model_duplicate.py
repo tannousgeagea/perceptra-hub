@@ -22,6 +22,7 @@ from api.dependencies import (
 from api.routers.ml_models.utils import serialize_model_detail, get_model_by_id
 from api.routers.ml_models.schemas import ModelCreateRequest, ModelDetailResponse, ModelUpdateRequest
 from asgiref.sync import sync_to_async
+from projects.dependencies import require_project_permission
 
 
 router = APIRouter(
@@ -67,12 +68,13 @@ async def duplicate_model(
     Duplicate an existing model (without versions).
     Creates a copy with same task, framework, config, and tags.
     
-    Requires: Organization member
+    Requires: the editor role in the model's project (or org admin).
     """
     import uuid
-    
+
     # Get original model
     original = await get_model_by_id(model_id, ctx.organization)
+    await sync_to_async(require_project_permission)(ctx, original.project, "edit", "Duplicating a model")
     
     # Generate new name if not provided
     if not new_name:

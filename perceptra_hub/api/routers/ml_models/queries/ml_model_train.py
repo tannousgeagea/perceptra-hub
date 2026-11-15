@@ -22,6 +22,7 @@ from api.dependencies import (
 from api.routers.ml_models.utils import serialize_model_detail
 from api.routers.ml_models.schemas import TrainingTriggerRequest, TrainingTriggerResponse
 from asgiref.sync import sync_to_async
+from projects.dependencies import require_project_permission
 
 router = APIRouter(
     prefix="/models",
@@ -61,12 +62,13 @@ async def trigger_training(
     """
     Trigger training for a new version of a model.
     
-    Requires: Organization member with edit permissions
+    Requires: the editor role in the model's project (or org admin).
     """
     import uuid
-    
+
     # Get model
     model = await get_model_by_id(model_id, ctx.organization)
+    await sync_to_async(require_project_permission)(ctx, model.project, "edit", "Training a model")
     
     # Verify dataset version exists and belongs to same organization
     try:

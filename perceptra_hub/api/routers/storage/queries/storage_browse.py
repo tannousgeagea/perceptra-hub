@@ -19,7 +19,8 @@ from asgiref.sync import sync_to_async
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from api.dependencies import RequestContext, require_permission
+from api.dependencies import RequestContext, get_request_context
+from projects.dependencies import require_image_write
 from perceptra_storage import StorageError, StoragePermissionError
 from storage.models import StorageProfile
 from storage.services import StorageServiceError, get_storage_adapter_for_profile
@@ -108,6 +109,12 @@ async def browse_storage_profile(
     token: Optional[str] = Query(None, description="next_token of the previous page"),
     page_size: int = Query(200, ge=1, le=1000),
     images_only: bool = Query(True, description="Only list image files"),
-    ctx: RequestContext = Depends(require_permission("write")),
+    project_id: Optional[UUID] = Query(
+        None, description="Linking into this project: its editors may browse too"
+    ),
+    ctx: RequestContext = Depends(get_request_context),
 ):
+    # Browsing serves linking, so it follows the same rule: org editors, or the
+    # editors of the project the files are being linked into.
+    await require_image_write(ctx, project_id)
     return await sync_to_async(_browse)(ctx.organization, storage_profile_id, prefix, token, page_size, images_only)

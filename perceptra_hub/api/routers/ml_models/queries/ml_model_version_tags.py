@@ -16,6 +16,7 @@ from api.dependencies import RequestContext, get_request_context
 from api.routers.ml_models.schemas import ModelVersionResponse
 from api.routers.ml_models.utils import get_model_by_id, serialize_model_version
 from ml_models.models import Model, ModelTag, ModelVersion
+from projects.dependencies import require_project_permission
 
 router = APIRouter(prefix="/models")
 
@@ -34,13 +35,9 @@ def _check_tag(tag: str) -> str:
     return tag
 
 
-def _check_can_edit(model: Model, ctx: RequestContext) -> None:
-    # Same rule as editing the model: its creator, or an org admin/owner.
-    if not ctx.has_role('admin', 'owner') and model.created_by_id != ctx.user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the model's creator or an organization admin can tag its versions",
-        )
+async def _check_can_edit(model: Model, ctx: RequestContext) -> None:
+    # Same rule as editing the model: the editor role in the model's project.
+    await sync_to_async(require_project_permission)(ctx, model.project, "edit", "Tagging a model version")
 
 
 def _tag_object(organization, name: str) -> ModelTag:
@@ -84,7 +81,7 @@ async def add_version_tag(
     """Tag a model version (for "baseline", untagging the model's other versions)."""
     tag = _check_tag(tag)
     model = await get_model_by_id(model_id, ctx.organization)
-    _check_can_edit(model, ctx)
+    await _check_can_edit(model, ctx)
     return await _set_tag(model, version_id, tag, True)
 
 
@@ -98,5 +95,5 @@ async def remove_version_tag(
     """Remove a tag from a model version."""
     tag = _check_tag(tag)
     model = await get_model_by_id(model_id, ctx.organization)
-    _check_can_edit(model, ctx)
+    await _check_can_edit(model, ctx)
     return await _set_tag(model, version_id, tag, False)

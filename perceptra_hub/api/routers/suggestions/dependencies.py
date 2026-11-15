@@ -1,6 +1,10 @@
 import os
 from typing import Optional
 
+from fastapi import Depends
+
+from api.dependencies import ProjectContext, get_project_context
+
 from .inference_client import SegInferenceClient
 from .schemas import ModelConfig
 from .segmentation_service_mock import MockSegmentationService
@@ -17,7 +21,10 @@ def get_segmentation_service():
     return SegInferenceClient(base_url=url, timeout_s=timeout, api_key=api_key)
 
 
-def get_suggestion_service() -> SuggestionService:
+def get_suggestion_service(ctx: ProjectContext = Depends(get_project_context)) -> SuggestionService:
+    # Every endpoint using this one makes or changes suggestions: annotator and up.
+    # (Read-only endpoints build their own service.)
+    ctx.require_annotate_permission()
     return SuggestionService()
 
 

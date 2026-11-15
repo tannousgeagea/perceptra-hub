@@ -10,9 +10,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
 
-from api.dependencies import get_current_user
+from api.dependencies import RequestContext, get_request_context
 from inferences.models import ModelEvaluation
 from ml_models.models import Model
+from projects.dependencies import require_project_permission
 
 router = APIRouter()
 
@@ -48,13 +49,14 @@ def _to_summary(ev: ModelEvaluation) -> EvaluationSummary:
 
 
 @router.get("/model-evaluations/{evaluation_id}", response_model=EvaluationSummary)
-def get_evaluation(evaluation_id: str, user=Depends(get_current_user)):
+def get_evaluation(evaluation_id: str, ctx: RequestContext = Depends(get_request_context)):
     try:
-        ev = ModelEvaluation.objects.select_related("challenger", "champion").get(
-            evaluation_id=evaluation_id
+        ev = ModelEvaluation.objects.select_related("challenger__model__project", "champion").get(
+            evaluation_id=evaluation_id, challenger__model__organization=ctx.organization
         )
     except ModelEvaluation.DoesNotExist:
         raise HTTPException(status_code=404, detail="Evaluation not found")
+    require_project_permission(ctx, ev.challenger.model.project, "view", "Viewing this evaluation")
     return _to_summary(ev)
 
 
@@ -63,12 +65,15 @@ def list_model_evaluations(
     model_id: str,
     limit: int = 20,
     offset: int = 0,
-    user=Depends(get_current_user),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     try:
-        model = Model.objects.get(model_id=model_id)
+        model = Model.objects.select_related("project").get(
+            model_id=model_id, organization=ctx.organization
+        )
     except Model.DoesNotExist:
         raise HTTPException(status_code=404, detail="Model not found")
+    require_project_permission(ctx, model.project, "view", "Viewing evaluations")
 
     qs = (
         ModelEvaluation.objects.filter(challenger__model=model)
@@ -86,14 +91,16 @@ def list_model_evaluations(
     "/model-evaluations/{evaluation_id}/promote",
     status_code=status.HTTP_200_OK,
 )
-def manually_promote_challenger(evaluation_id: str, user=Depends(get_current_user)):
+def manually_promote_challenger(evaluation_id: str, ctx: RequestContext = Depends(get_request_context)):
     """Human-override: promote the challenger regardless of automatic recommendation."""
+    user = ctx.user
     try:
-        ev = ModelEvaluation.objects.select_related("challenger__model__organization").get(
-            evaluation_id=evaluation_id
-        )
+        ev = ModelEvaluation.objects.select_related(
+            "challenger__model__organization", "challenger__model__project"
+        ).get(evaluation_id=evaluation_id, challenger__model__organization=ctx.organization)
     except ModelEvaluation.DoesNotExist:
         raise HTTPException(status_code=404, detail="Evaluation not found")
+    require_project_permission(ctx, ev.challenger.model.project, "manage", "Promoting a model")
 
     if ev.challenger.status != "trained":
         raise HTTPException(

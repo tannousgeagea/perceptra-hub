@@ -20,6 +20,7 @@ from api.dependencies import (
 from api.routers.ml_models.utils import serialize_model_detail, get_model_by_id
 from api.routers.ml_models.schemas import ModelCreateRequest, ModelDetailResponse, ModelUpdateRequest
 from asgiref.sync import sync_to_async
+from projects.dependencies import require_project_permission
 
 router = APIRouter(
     prefix="/models",
@@ -87,17 +88,10 @@ async def update_model(
     """
     Update model details (name, description, tags, config).
     
-    Requires: Organization member with edit permissions
+    Requires: the editor role in the model's project (or org admin).
     """
     model = await get_model_by_id(model_id, ctx.organization)
-    
-    # Check permissions - must be creator or org admin
-    if not ctx.has_role('admin', 'owner'):
-        if model.created_by and model.created_by.id != ctx.user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only model creator or organization admin can update"
-            )
-    
+    await sync_to_async(require_project_permission)(ctx, model.project, "edit", "Editing a model")
+
     updated_model = await update_model_in_db(model, data)
     return await serialize_model_detail(updated_model)

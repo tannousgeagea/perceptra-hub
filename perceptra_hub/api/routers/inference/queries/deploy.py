@@ -9,9 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
 
-from api.dependencies import get_current_user
+from api.dependencies import RequestContext, get_request_context
 from inferences.orchestrator import InferenceOrchestrator
 from ml_models.models import ModelVersion
+from projects.dependencies import require_project_permission
 
 router = APIRouter()
 
@@ -36,14 +37,16 @@ class DeployResponse(BaseModel):
 def deploy_model_version(
     version_id: str,
     body: DeployRequest,
-    user=Depends(get_current_user),
+    ctx: RequestContext = Depends(get_request_context),
 ):
+    user = ctx.user
     try:
         model_version = ModelVersion.objects.select_related(
-            "model__organization", "model__task", "storage_profile"
-        ).get(version_id=version_id)
+            "model__organization", "model__task", "model__project", "storage_profile"
+        ).get(version_id=version_id, model__organization=ctx.organization)
     except ModelVersion.DoesNotExist:
         raise HTTPException(status_code=404, detail="Model version not found")
+    require_project_permission(ctx, model_version.model.project, "manage", "Deploying a model")
 
     try:
         orchestrator = InferenceOrchestrator(model_version)
@@ -71,14 +74,16 @@ def deploy_model_version(
 )
 def undeploy_model_version(
     version_id: str,
-    user=Depends(get_current_user),
+    ctx: RequestContext = Depends(get_request_context),
 ):
+    user = ctx.user
     try:
         model_version = ModelVersion.objects.select_related(
-            "model__organization"
-        ).get(version_id=version_id)
+            "model__organization", "model__project"
+        ).get(version_id=version_id, model__organization=ctx.organization)
     except ModelVersion.DoesNotExist:
         raise HTTPException(status_code=404, detail="Model version not found")
+    require_project_permission(ctx, model_version.model.project, "manage", "Undeploying a model")
 
     try:
         orchestrator = InferenceOrchestrator(model_version)

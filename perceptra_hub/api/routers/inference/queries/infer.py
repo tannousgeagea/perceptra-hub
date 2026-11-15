@@ -7,7 +7,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, status
 from asgiref.sync import sync_to_async
 from ml_models.models import ModelVersion
-from api.dependencies import RequestContext, get_request_context
+from api.dependencies import RequestContext, require_permission
 from datetime import datetime
 from typing import Callable, Optional
 from fastapi import Request
@@ -49,7 +49,8 @@ async def infer(
     file: UploadFile = File(...),
     confidence_threshold:Optional[float] = 0.25,
     max_detections:Optional[int] = 100,
-    ctx: RequestContext = Depends(get_request_context),
+    # Running models is the org "operate" permission (operator and up).
+    ctx: RequestContext = Depends(require_permission("operate")),
 ):
     owned = await sync_to_async(
         ModelVersion.objects.filter(id=model_version_id, model__organization=ctx.organization).exists

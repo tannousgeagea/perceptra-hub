@@ -32,6 +32,7 @@ async def update_session_model(
     Switch to different model mid-session.
     Clears existing suggestions.
     """
+    ctx.require_annotate_permission()
     await sug_svc.update_session_model(session_id, request.config)
     await sug_svc.clear_session(session_id)
     
