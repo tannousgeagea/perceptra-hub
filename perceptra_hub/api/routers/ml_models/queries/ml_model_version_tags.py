@@ -41,10 +41,9 @@ async def _check_can_edit(model: Model, ctx: RequestContext) -> None:
 
 
 def _tag_object(organization, name: str) -> ModelTag:
-    # ModelTag.name is unique across organizations, so an existing tag of that
-    # name is reused wherever it was first created.
-    tag = ModelTag.objects.filter(name=name).first()
-    return tag or ModelTag.objects.create(organization=organization, name=name)
+    # Tag names are unique per organization; each organization has its own.
+    tag, _ = ModelTag.objects.get_or_create(organization=organization, name=name)
+    return tag
 
 
 @sync_to_async

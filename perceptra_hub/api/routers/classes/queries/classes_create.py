@@ -33,9 +33,6 @@ class TimedRoute(APIRoute):
             response: Response = await original_route_handler(request)
             duration = time.time() - before
             response.headers["X-Response-Time"] = str(duration)
-            print(f"route duration: {duration}")
-            print(f"route response: {response}")
-            print(f"route response headers: {response.headers}")
             return response
 
         return custom_route_handler
@@ -57,6 +54,9 @@ async def create_annotation_class(
     new_class: AnnotationClassCreate,
     project_ctx: ProjectContext = Depends(get_project_context)
 ):
+    # Classes are the project's label set: the editor role or above.
+    project_ctx.require_edit_permission()
+
     @sync_to_async
     def create_class_record(project: Project, data: AnnotationClassCreate):
         annotation_group = AnnotationGroup.objects.filter(project=project).order_by("id").first()
