@@ -45,7 +45,8 @@ class ModelTag(models.Model):
         related_name='model_tags',
         help_text=_('Organization that owns this tag')
     )
-    name = models.CharField(max_length=50, unique=True)
+    # Unique per organization (Meta.unique_together), not across organizations.
+    name = models.CharField(max_length=50)
     description = models.TextField(blank=True, null=True)
     color = models.CharField(
         max_length=7,

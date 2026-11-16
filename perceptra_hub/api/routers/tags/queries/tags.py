@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Callable, Optional
 from fastapi import Request, Response
 from fastapi import APIRouter, Depends, HTTPException
-from api.dependencies import RequestContext, get_request_context
+from api.dependencies import RequestContext, get_request_context, require_permission
 from fastapi.routing import APIRoute
 from typing import List
 from pydantic import BaseModel
@@ -18,9 +18,6 @@ class TimedRoute(APIRoute):
             response: Response = await original_route_handler(request)
             duration = time.time() - before
             response.headers["X-Response-Time"] = str(duration)
-            print(f"route duration: {duration}")
-            print(f"route response: {response}")
-            print(f"route response headers: {response.headers}")
             return response
 
         return custom_route_handler
@@ -48,8 +45,9 @@ def list_tags(ctx: RequestContext = Depends(get_request_context)):
     return ModelTag.objects.filter(organization=ctx.organization).order_by("name")
 
 @router.post("/tags", response_model=TagOut)
-def create_tag(data: TagIn, ctx: RequestContext = Depends(get_request_context)):
-    if ModelTag.objects.filter(name=data.name).exists():
+def create_tag(data: TagIn, ctx: RequestContext = Depends(require_permission("write"))):
+    """Create a model tag in the organization (org editor and up)."""
+    if ModelTag.objects.filter(organization=ctx.organization, name=data.name).exists():
         raise HTTPException(status_code=400, detail="Tag already exists")
 
     tag = ModelTag.objects.create(
