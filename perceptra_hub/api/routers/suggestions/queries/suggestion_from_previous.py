@@ -42,6 +42,7 @@ async def propagate_from_previous(
         target_image_id=image_id,
         source_image_id=request.source_image_id,
         annotation_uids=request.annotation_uids,
+        project=ctx.project,
     )
 
     return SegmentationResponse(suggestions=suggestions, count=len(suggestions))

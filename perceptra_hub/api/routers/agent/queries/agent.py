@@ -421,7 +421,19 @@ async def upload_artifact(
     file: UploadFile = File(...),
     agent: Agent = Depends(authenticate_agent_from_header)
 ):
-    """Receive artifact from agent and write to the configured storage backend."""
+    """
+    Receive artifact from agent and write to the configured storage backend.
+    Only a job's own files (checkpoint.pt, model.onnx, training.log under its
+    model version's folder, in that version's storage profile) are accepted,
+    and only from the agent the job is assigned to.
+    """
+    @sync_to_async
+    def _allowed():
+        return AgentManager.artifact_upload_allowed(agent, key, storage_profile_id)
+
+    if not await _allowed():
+        raise HTTPException(403, "This agent has no running job that writes to this key")
+
     content = await file.read()
 
     @sync_to_async

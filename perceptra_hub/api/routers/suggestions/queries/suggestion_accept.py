@@ -28,7 +28,7 @@ async def accept_suggestions(
     Convert accepted suggestions into real annotations.
     The target image is resolved from the session — no image_id needed in the URL.
     """
-    session = await svc.get_session(session_id)
+    session = await svc.get_session(session_id, ctx.project)
 
     created = await svc.accept_suggestions(
         session_id=session_id,

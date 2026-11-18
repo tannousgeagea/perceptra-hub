@@ -93,7 +93,7 @@ async def get_project_image(
                 "source_of_origin": image.source_of_origin,
                 "created_at": image.created_at,
                 "updated_at": image.updated_at,
-                "uploaded_by": image.uploaded_by.username,
+                "uploaded_by": image.uploaded_by.username if image.uploaded_by else None,
                 "tags": [t.name for t in image.tags.all()],
                 "storage_profile": {
                     "id": str(image.storage_profile.id),

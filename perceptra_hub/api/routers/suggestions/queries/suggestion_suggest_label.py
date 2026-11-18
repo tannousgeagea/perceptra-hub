@@ -30,25 +30,11 @@ async def suggest_labels(
     """
     Given a bbox, suggest most likely class labels.
     Uses CLIP or project-specific classifier.
+
+    Not available yet: the label classifier isn't wired up, and the code that
+    was here crashed on every call. The console doesn't use this route.
     """
-    session_id = await svc.create_session(
-        project=ctx.project,
-        image_id=image_id,
-        source_type=SuggestionSourceType.LABEL_SUGGEST,
-        user=ctx.user
-    )
-    
-    suggestions = await svc.suggest_labels(
-        session_id=session_id,
-        project=ctx.project,
-        image_id=image_id,
-        bbox=request.bbox,
-        top_k=request.top_k
-    )
-    
-    return SuggestionSessionResponse(
-        session_id=session_id,
-        status="ready",
-        source_type=SuggestionSourceType.LABEL_SUGGEST,
-        suggestions=suggestions
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Label suggestions are not available yet",
     )

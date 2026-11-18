@@ -33,6 +33,7 @@ async def update_session_model(
     Clears existing suggestions.
     """
     ctx.require_annotate_permission()
+    await sug_svc.get_session(session_id, ctx.project)  # 404 unless it is this project's
     await sug_svc.update_session_model(session_id, request.config)
     await sug_svc.clear_session(session_id)
     

@@ -27,4 +27,5 @@ async def clear_session(
     svc: SuggestionService = Depends(get_suggestion_service)
 ):
     """Discard all suggestions in session."""
+    await svc.get_session(session_id, ctx.project)  # 404 unless it is this project's
     await svc.clear_session(session_id)

@@ -27,7 +27,7 @@ async def get_session(
     sug_svc: SuggestionService = Depends(get_suggestion_service)
 ):
     """Get session with current model config and suggestions."""
-    session = await sug_svc.get_session(session_id)
+    session = await sug_svc.get_session(session_id, ctx.project)
     suggestions = sug_svc._get_suggestions(session_id)
     
     return SuggestionSessionResponse(
