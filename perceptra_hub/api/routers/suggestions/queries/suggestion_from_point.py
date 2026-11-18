@@ -34,10 +34,10 @@ async def segment_from_points(
     User clicks positive/negative points → returns single mask.
     Fast enough for real-time interaction.
     """
-    session = await sug_svc.get_session(request.session_id)
-    
+    session = await sug_svc.get_session(request.session_id, ctx.project)
+
     # Load image
-    image = await sug_svc.load_image(image_id)
+    image = await sug_svc.load_image(image_id, ctx.project)
     
     # Run segmentation
     points = [(p.x, p.y, p.label) for p in request.points]

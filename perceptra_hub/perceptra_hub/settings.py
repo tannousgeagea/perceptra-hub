@@ -23,13 +23,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-edvpp4+wx19+(o+k-9+yd)l=s&yvg!j(0bv^+npq-yve0lmj$*'
+# Signs login tokens, sessions and (by default) media links: it must come from
+# the environment. Changing it signs everyone out.
+SECRET_KEY = env('DJANGO_SECRET_KEY', '')
+if not SECRET_KEY:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured("DJANGO_SECRET_KEY is not set")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env('DJANGO_DEBUG', 'false').lower() == 'true'
 
-ALLOWED_HOSTS = [env('ALLOWED_HOSTS', '0.0.0.0')]
+# Comma-separated, e.g. "localhost,127.0.0.1,hub.example.com".
+ALLOWED_HOSTS = [h.strip() for h in env('ALLOWED_HOSTS', '0.0.0.0').split(',') if h.strip()]
 
 
 # Application definition

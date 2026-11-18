@@ -334,6 +334,54 @@ class AgentManager:
                 raise TrainingJob.DoesNotExist
         return training_job
 
+    # The files an agent may upload for a job, by the artifact name it reports
+    # them under in complete_job. They live at
+    # organizations/{org_id}/models/{model_version_id}/{file}.
+    ARTIFACT_FILES = {
+        'checkpoint_key': 'checkpoint.pt',
+        'onnx_key': 'model.onnx',
+        'logs_key': 'training.log',
+    }
+
+    @staticmethod
+    def _artifact_prefix(model_version) -> str:
+        return f"organizations/{model_version.model.organization.org_id}/models/{model_version.version_id}/"
+
+    @classmethod
+    def artifact_upload_allowed(cls, agent: Agent, key: str, storage_profile_id: str) -> bool:
+        """
+        Whether `agent` may write `key` to the storage profile `storage_profile_id`:
+        the key must be one of ARTIFACT_FILES under a model version that has an
+        unfinished training job this agent may report on, and the profile must
+        be that model version's own.
+        """
+        prefix, _, filename = key.rpartition('/')
+        if filename not in cls.ARTIFACT_FILES.values():
+            return False
+        parts = prefix.split('/')
+        if len(parts) != 4 or parts[0] != 'organizations' or parts[2] != 'models':
+            return False
+        if parts[1] != str(agent.organization.org_id):
+            return False
+
+        jobs = TrainingJob.objects.select_related(
+            'training_session__model_version__model__organization',
+            'training_session__model_version__storage_profile',
+        ).filter(
+            training_session__model_version__version_id=parts[3],
+            training_session__model_version__model__organization=agent.organization,
+            completed_at__isnull=True,
+        )
+        for job in jobs:
+            try:
+                cls._agent_training_job(agent, job.job_id)
+            except TrainingJob.DoesNotExist:
+                continue  # assigned to another agent
+            model_version = job.training_session.model_version
+            profile = model_version.storage_profile
+            return profile is not None and str(profile.storage_profile_id) == str(storage_profile_id)
+        return False
+
     @classmethod
     def update_job_progress(
         cls,
@@ -424,6 +472,17 @@ class AgentManager:
                 
                 # Update model version with artifacts
                 if success and artifacts:
+                    # Keep only the keys this job could have uploaded (see
+                    # artifact_upload_allowed); anything else is dropped.
+                    prefix = cls._artifact_prefix(model_version)
+                    expected = {name: prefix + f for name, f in cls.ARTIFACT_FILES.items()}
+                    for name, value in artifacts.items():
+                        if value and value != expected.get(name):
+                            logger.warning(f"Job {job_id}: ignored artifact {name}={value!r}")
+                    artifacts = {
+                        name: value for name, value in artifacts.items()
+                        if value and value == expected.get(name)
+                    }
                     model_version.checkpoint_key = artifacts.get('checkpoint_key', '')
                     model_version.onnx_model_key = artifacts.get('onnx_key', '')
                     model_version.training_logs_key = artifacts.get('logs_key', '')

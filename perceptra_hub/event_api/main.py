@@ -86,12 +86,13 @@ celery = app.celery_app
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    description = exc.args[0]
+    # The details go to the log only; the caller gets the request ID to quote.
+    logging.exception("Unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
     return await http_exception_handler(
         request,
         HTTPException(
             500,
-            {"code": "generic_exception", "message": description},
+            {"code": "generic_exception", "message": "Internal server error"},
             headers={"X-Request-ID": correlation_id.get() or ""},
         ),
     )

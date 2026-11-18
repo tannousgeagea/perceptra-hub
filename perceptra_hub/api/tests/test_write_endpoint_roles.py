@@ -70,7 +70,7 @@ NO_ROLE_NEEDED = {
     ("POST", "/agents/heartbeat"): "agent credentials; updates the calling agent only",
     ("POST", "/agents/jobs/progress"): "agent credentials; the agent's own jobs only",
     ("POST", "/agents/jobs/complete"): "agent credentials; the agent's own jobs only",
-    ("POST", "/agents/artifacts/upload"): "agent credentials; the agent's organization's storage only",
+    ("POST", "/agents/artifacts/upload"): "agent credentials; only its own running job's artifact files",
     ("POST", "/agents/inference-jobs/{job_id}/results"): "agent credentials; the agent's own jobs only",
 }
 

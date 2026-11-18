@@ -34,13 +34,13 @@ async def segment_from_exemplar(
     User labels one object → finds all similar.
     Maps directly to your Feature #2 (Similar Object Suggestions).
     """
-    session = await sug_svc.get_session(request.session_id)
-    
-    image = await sug_svc.load_image(image_id)
-    
+    session = await sug_svc.get_session(request.session_id, ctx.project)
+
+    image = await sug_svc.load_image(image_id, ctx.project)
+
     # Get exemplar box from existing annotation or request
     if request.reference_annotation_uid:
-        ann = await sug_svc._get_annotation(request.reference_annotation_uid)
+        ann = await sug_svc._get_annotation(request.reference_annotation_uid, ctx.project)
         box = (ann.data[0], ann.data[1], 
                ann.data[2] - ann.data[0], ann.data[3] - ann.data[1])
         suggested_class_id = ann.annotation_class.class_id

@@ -25,6 +25,7 @@ async def reject_suggestions(
     svc: SuggestionService = Depends(get_suggestion_service),
 ):
     """Remove rejected suggestions from the session cache."""
+    await svc.get_session(session_id, ctx.project)  # 404 unless it is this project's
     await svc.reject_suggestions(
         session_id=session_id,
         suggestion_ids=request.suggestion_ids,

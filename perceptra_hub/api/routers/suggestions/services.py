@@ -9,10 +9,23 @@ import numpy as np
 from pathlib import Path
 from asgiref.sync import sync_to_async
 from django.db import transaction
+from fastapi import HTTPException
 
 from annotations.models import Annotation, AnnotationClass, AnnotationType, SuggestionSession
 from projects.models import Project, ProjectImage
 from .schemas import *
+
+
+def _project_image(image_id, project: Project, *related: str) -> ProjectImage:
+    """The image `image_id` if it belongs to `project`; 404 otherwise."""
+    image = (
+        ProjectImage.objects.select_related(*related)
+        .filter(id=image_id, project=project)
+        .first()
+    )
+    if image is None:
+        raise HTTPException(status_code=404, detail="Image not found in this project")
+    return image
 
 class SuggestionService:
     """
@@ -50,7 +63,7 @@ class SuggestionService:
         user,
         config: ModelConfig,
     ) -> UUID:
-        image = ProjectImage.objects.get(id=image_id, project=project)
+        image = _project_image(image_id, project)
         session, _ = SuggestionSession.objects.get_or_create(
             project_image=image,
             created_by=user,
@@ -63,9 +76,15 @@ class SuggestionService:
         return session.suggestion_id
     
     @sync_to_async
-    def get_session(self, session_id: UUID) -> SuggestionSession:
-        """Get session with model config."""
-        return SuggestionSession.objects.get(suggestion_id=session_id)
+    def get_session(self, session_id: UUID, project: Project) -> SuggestionSession:
+        """The session with its model config, if it is on an image of `project`; 404 otherwise."""
+        session = SuggestionSession.objects.filter(
+            suggestion_id=session_id,
+            project_image__project=project,
+        ).first()
+        if session is None:
+            raise HTTPException(status_code=404, detail="Suggestion session not found in this project")
+        return session
     
     @sync_to_async
     def update_session_model(
@@ -95,15 +114,13 @@ class SuggestionService:
         await self._update_session_count(session_id, len(suggestions))
     
     @sync_to_async
-    def load_image(self, image_id: int) -> np.ndarray:
-        """Load image as numpy array from storage."""
+    def load_image(self, image_id: int, project: Project) -> np.ndarray:
+        """Load an image of `project` as a numpy array from storage."""
         from PIL import Image as PILImage
         import requests
         from io import BytesIO
-        
-        project_image = ProjectImage.objects.select_related(
-            'image__storage_profile'
-        ).get(id=image_id)
+
+        project_image = _project_image(image_id, project, 'image__storage_profile')
         
         
         if project_image.image.storage_profile.backend == "local":
@@ -143,11 +160,12 @@ class SuggestionService:
         image_id: int,
         reference_uid: str,
         max_suggestions: int,
-        min_similarity: float
+        min_similarity: float,
+        project: Project,
     ) -> List[Suggestion]:
         """Find visually similar regions using embeddings."""
         # 1. Get reference annotation bbox
-        ref_ann = await self._get_annotation(reference_uid)
+        ref_ann = await self._get_annotation(reference_uid, project)
         
         # 2. Extract embedding of reference region
         # ref_embedding = embedding_service.extract(image, ref_ann.data)
@@ -180,14 +198,20 @@ class SuggestionService:
         target_image_id: int,
         source_image_id: int,
         annotation_uids: Optional[List[str]],
+        project: Project,
     ) -> List[Suggestion]:
         """Copy active annotations from a source image as pending suggestions.
 
         No AI model is required.  If a session_id is provided the new
         suggestions are *appended* to that session's existing cache so they
         coexist with any SAM suggestions already there.
+
+        Both images, and the session if given, must belong to `project` (404).
         """
-        source_anns = await self._get_image_annotations(source_image_id, annotation_uids)
+        await sync_to_async(_project_image)(target_image_id, project)
+        if session_id is not None:
+            await self.get_session(session_id, project)
+        source_anns = await self._get_image_annotations(source_image_id, project, annotation_uids)
 
         new_suggestions = [
             Suggestion(
@@ -336,19 +360,26 @@ class SuggestionService:
         return img.image.path
     
     @sync_to_async
-    def _get_annotation(self, uid: str) -> Annotation:
-        return Annotation.objects.select_related('annotation_class').get(
-            annotation_uid=uid
-        )
-    
+    def _get_annotation(self, uid: str, project: Project) -> Annotation:
+        """The annotation `uid` if it is on an image of `project`; 404 otherwise."""
+        annotation = Annotation.objects.select_related('annotation_class').filter(
+            annotation_uid=uid,
+            project_image__project=project,
+        ).first()
+        if annotation is None:
+            raise HTTPException(status_code=404, detail="Annotation not found in this project")
+        return annotation
+
     @sync_to_async
     def _get_image_annotations(
-        self, 
-        image_id: int, 
+        self,
+        image_id: int,
+        project: Project,
         uids: Optional[List[str]] = None,
     ) -> List[Annotation]:
+        image = _project_image(image_id, project)
         qs = Annotation.objects.filter(
-            project_image_id=image_id, 
+            project_image=image,
             is_active=True
         ).select_related('annotation_class')
         if uids:
@@ -367,7 +398,7 @@ class SuggestionService:
         """Create annotation, optionally storing the SAM polygon contour."""
         from annotations.models import Annotation, AnnotationClass, AnnotationType
 
-        image = ProjectImage.objects.get(id=image_id)
+        image = _project_image(image_id, project)
         ann_class = AnnotationClass.objects.get(
             class_id=class_id,
             annotation_group__project=project,
