@@ -7,7 +7,7 @@ from redis import Redis
 
 from api.dependencies import get_project_context, ProjectContext
 from api.routers.suggestions.schemas import *
-from api.routers.suggestions.services import SuggestionService
+from api.routers.suggestions.services import SuggestionService, require_session_image
 from api.routers.suggestions.segmentation_service import SegmentationService
 from api.routers.suggestions.dependencies import get_segmentation_service
 
@@ -35,6 +35,7 @@ async def segment_from_exemplar(
     Maps directly to your Feature #2 (Similar Object Suggestions).
     """
     session = await sug_svc.get_session(request.session_id, ctx.project)
+    require_session_image(session, image_id)
 
     image = await sug_svc.load_image(image_id, ctx.project)
 

@@ -179,7 +179,7 @@ def _job_images_response(queryset, job_summary, *, skip, limit, status_filter, a
                 "source_of_origin": ji.project_image.image.source_of_origin,
                 "created_at": ji.project_image.image.created_at,
                 "updated_at": ji.project_image.updated_at,
-                "uploaded_by": ji.project_image.image.uploaded_by.username,
+                "uploaded_by": ji.project_image.image.uploaded_by.username if ji.project_image.image.uploaded_by else None,
                 "reviewed_at": ji.project_image.reviewed_at.isoformat() if ji.project_image.reviewed_at else None,
                 "reviewed_by": ji.project_image.reviewed_by.username if ji.project_image.reviewed_by else None,
                 "tags": [t.name for t in ji.project_image.image.tags.all()],

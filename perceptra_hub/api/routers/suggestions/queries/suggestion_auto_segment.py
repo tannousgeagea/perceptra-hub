@@ -37,11 +37,12 @@ async def sam_auto_segment(
     import os
 
     from asgiref.sync import sync_to_async
-    from api.routers.suggestions.services import _project_image
+    from api.routers.suggestions.services import _project_image, require_session_image
 
     session = await svc.get_session(request.session_id, ctx.project)
     # The task loads the image by ID alone, so check it is this project's first.
     await sync_to_async(_project_image)(image_id, ctx.project)
+    require_session_image(session, image_id)
 
     if not os.getenv("SEG_INFERENCE_URL", "").strip():
         raise HTTPException(

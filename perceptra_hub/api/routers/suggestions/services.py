@@ -27,6 +27,16 @@ def _project_image(image_id, project: Project, *related: str) -> ProjectImage:
         raise HTTPException(status_code=404, detail="Image not found in this project")
     return image
 
+
+def require_session_image(session: SuggestionSession, image_id) -> None:
+    """
+    409 unless `session` was started on image `image_id`. Accepting writes to
+    the session's image, so suggestions made on any other image would land on
+    the wrong one.
+    """
+    if str(session.project_image_id) != str(image_id):
+        raise HTTPException(status_code=409, detail="This AI session belongs to another image; start a new one")
+
 class SuggestionService:
     """
     Handles suggestion lifecycle:
@@ -210,7 +220,7 @@ class SuggestionService:
         """
         await sync_to_async(_project_image)(target_image_id, project)
         if session_id is not None:
-            await self.get_session(session_id, project)
+            require_session_image(await self.get_session(session_id, project), target_image_id)
         source_anns = await self._get_image_annotations(source_image_id, project, annotation_uids)
 
         new_suggestions = [
