@@ -5,6 +5,8 @@ on:
     workflows: ["Auto Tag Version"]
     types:
       - completed
+  # Manual run: rebuilds the latest existing tag from main, no new tag.
+  workflow_dispatch:
 
 jobs:
   # Every data-API route must authenticate (api/tests/test_route_auth.py).
@@ -30,6 +32,7 @@ jobs:
         docker run --rm --network host --entrypoint python3 \
           -w /home/appuser/src/perceptra_hub \
           -e REDIS_HOST=localhost -e REDIS_PORT=6379 \
+          -e DJANGO_SECRET_KEY=ci-only-not-a-real-secret \
           -e DATABASE_ENGINE=django.db.backends.postgresql -e DATABASE_HOST=localhost \
           perceptrahub:ci -m unittest api.tests.test_route_auth -v
 
