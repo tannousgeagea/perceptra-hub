@@ -4,9 +4,10 @@ Tags on one model version.
     PUT    /api/v1/models/{model_id}/versions/{version_id}/tags/{tag}   add
     DELETE /api/v1/models/{model_id}/versions/{version_id}/tags/{tag}   remove
 
-Only "baseline" for now: one version per model (setting it moves it). Where a
-version runs (staging / production) is its deployment status, set by Deploy,
-not a tag.
+Any of the organization's model tags; a new name creates one (stored lower-case,
+like tags typed on a model). "baseline" is special: one version per model
+(setting it moves it). "production" and "staging" are refused: where a version
+runs is its deployment status, set by Deploy, so a tag could only contradict it.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from asgiref.sync import sync_to_async
@@ -20,17 +21,31 @@ from projects.dependencies import require_project_permission
 
 router = APIRouter(prefix="/models")
 
-ALLOWED_TAGS = {"baseline"}
 # At most one version of a model carries these.
 EXCLUSIVE_TAGS = {"baseline"}
+# Deployment states: shown from deployment_status, never stored as tags.
+DEPLOYMENT_NAMES = {"production", "staging"}
+MAX_TAG_LENGTH = ModelTag._meta.get_field("name").max_length
 
 
-def _check_tag(tag: str) -> str:
+def _check_tag(tag: str, adding: bool = True) -> str:
     tag = tag.strip().lower()
-    if tag not in ALLOWED_TAGS:
+    if not adding:
+        # Removing: any name, so tags from before these rules can still be taken off.
+        if not tag:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tag name can't be empty")
+        return tag
+    if not tag:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tag name can't be empty")
+    if len(tag) > MAX_TAG_LENGTH:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown version tag '{tag}'. Allowed: {', '.join(sorted(ALLOWED_TAGS))}",
+            detail=f"Tag names are at most {MAX_TAG_LENGTH} characters",
+        )
+    if tag in DEPLOYMENT_NAMES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f'"{tag}" is where a version runs: set it with Deploy, not a tag',
         )
     return tag
 
@@ -40,9 +55,15 @@ async def _check_can_edit(model: Model, ctx: RequestContext) -> None:
     await sync_to_async(require_project_permission)(ctx, model.project, "edit", "Tagging a model version")
 
 
+def _find_tag(organization, name: str):
+    # Tag names are unique per organization; differing only in case is the same tag.
+    return ModelTag.objects.filter(organization=organization, name__iexact=name).order_by("id").first()
+
+
 def _tag_object(organization, name: str) -> ModelTag:
-    # Tag names are unique per organization; each organization has its own.
-    tag, _ = ModelTag.objects.get_or_create(organization=organization, name=name)
+    tag = _find_tag(organization, name)
+    if tag is None:
+        tag, _ = ModelTag.objects.get_or_create(organization=organization, name=name)
     return tag
 
 
@@ -56,21 +77,25 @@ def _set_tag(model: Model, version_id: str, tag: str, value: bool) -> dict:
         )
         if version is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version_id} not found")
-        tag_obj = _tag_object(model.organization, tag)
         if value:
+            tag_obj = _tag_object(model.organization, tag)
             if tag in EXCLUSIVE_TAGS:
                 for other in model.versions.filter(tags=tag_obj).exclude(pk=version.pk):
                     other.tags.remove(tag_obj)
             version.tags.add(tag_obj)
         else:
-            version.tags.remove(tag_obj)
+            # Removing never creates a tag; a name the org doesn't have is a no-op.
+            tag_obj = _find_tag(model.organization, tag)
+            if tag_obj is not None:
+                version.tags.remove(tag_obj)
     version = ModelVersion.objects.select_related(
         'dataset_version__project', 'created_by', 'storage_profile'
     ).get(pk=version.pk)
     return serialize_model_version(version)
 
 
-@router.put("/{model_id}/versions/{version_id}/tags/{tag}", response_model=ModelVersionResponse)
+# :path so a tag name may contain "/".
+@router.put("/{model_id}/versions/{version_id}/tags/{tag:path}", response_model=ModelVersionResponse)
 async def add_version_tag(
     model_id: str,
     version_id: str,
@@ -84,7 +109,7 @@ async def add_version_tag(
     return await _set_tag(model, version_id, tag, True)
 
 
-@router.delete("/{model_id}/versions/{version_id}/tags/{tag}", response_model=ModelVersionResponse)
+@router.delete("/{model_id}/versions/{version_id}/tags/{tag:path}", response_model=ModelVersionResponse)
 async def remove_version_tag(
     model_id: str,
     version_id: str,
@@ -92,7 +117,7 @@ async def remove_version_tag(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove a tag from a model version."""
-    tag = _check_tag(tag)
+    tag = _check_tag(tag, adding=False)
     model = await get_model_by_id(model_id, ctx.organization)
     await _check_can_edit(model, ctx)
     return await _set_tag(model, version_id, tag, False)
