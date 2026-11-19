@@ -79,6 +79,7 @@ async def get_project_image(
             "image": {
                 "id": str(pi.id),
                 "image_id": str(image.image_id),
+                "pk": image.id,
                 "name": image.name,
                 "original_filename": image.original_filename,
                 "width": image.width,
