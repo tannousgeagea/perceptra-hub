@@ -60,7 +60,8 @@ def check_metric_alerts(project_id: int, snapshot_id: int):
         
         # Send notifications if critical alerts
         if any(a.severity == 'critical' for a in created_alerts):
-            send_alert_notifications.delay(project_id, [a.id for a in created_alerts])
+            # Explicit queue: names without "queue:" route to "celery", which no worker reads.
+            send_alert_notifications.apply_async((project_id, [a.id for a in created_alerts]), queue='evaluation')
         
         return {
             'status': 'success',

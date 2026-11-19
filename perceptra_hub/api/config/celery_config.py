@@ -173,9 +173,11 @@ class BaseConfig:
     
     # Metric snapshot
     'create-daily-snapshots': {
-        'task': 'api.tasks.evaluation.metric_snapshot.create_daily_snapshots',
+        # The name the task registers under (@shared_task(name=...)), not its module path.
+        'task': 'evaluation.create_daily_snapshots',
         'schedule': crontab(hour=2, minute=0),  # 2 AM daily
-        'options': {'expires': 3600}  # Task expires after 1 hour
+        # The evaluation worker's queue; without one it waits in "celery", which no worker reads.
+        'options': {'queue': 'evaluation', 'expires': 3600}  # Task expires after 1 hour
     },
 
     # Continuous training loop: evaluate retraining policies every hour
