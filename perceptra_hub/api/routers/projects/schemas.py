@@ -132,6 +132,8 @@ class StorageProfileOut(BaseModel):
 class ImageDetail(BaseModel):
     id: str
     image_id: str
+    # The image's key in /api/v1/images/{pk}/… (e.g. removing a tag).
+    pk: Optional[int] = None
     name: str
     original_filename: Optional[str]
     width: Optional[int]

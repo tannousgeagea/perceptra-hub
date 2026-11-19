@@ -914,12 +914,12 @@ async def bulk_delete_images(
     summary="Add Tags to Image",
     description="Add one or more tags to an image"
 )
-async def add_tags_to_image(
-    image_id: str,
+def add_tags_to_image(
+    image_id: int,
     tag_names: List[str],
     ctx: RequestContext = Depends(get_request_context)
 ):
-    """Add tags to an image."""
+    """Add tags to an image. (Plain def: FastAPI runs it in a thread, as the ORM needs.)"""
 
     try:
         image = Image.objects.get(
@@ -1067,17 +1067,18 @@ async def bulk_add_tags_to_images(
 
 
 @router.delete(
-    "/{image_id}/tags/{tag_name}",
+    # :path so a tag name may contain "/".
+    "/{image_id}/tags/{tag_name:path}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Remove Tag from Image",
     description="Remove a specific tag from an image"
 )
-async def remove_tag_from_image(
-    image_id: str,
+def remove_tag_from_image(
+    image_id: int,
     tag_name: str,
     ctx: RequestContext = Depends(get_request_context)
 ):
-    """Remove a tag from an image."""
+    """Remove a tag from an image. (Plain def: FastAPI runs it in a thread, as the ORM needs.)"""
 
     try:
         image = Image.objects.get(
