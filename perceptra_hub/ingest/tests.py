@@ -283,3 +283,67 @@ class HeaderProbeTest(IngestFixture):
         self.assertEqual([r["status"] for r in results], ["error", "error", "created"])
         self.assertIn("not a readable image", results[0]["error"])
         self.assertIn("cannot read", results[1]["error"])
+
+
+class RenamedTagTest(IngestFixture):
+    """A tag renamed or merged in the app stays renamed when the source keeps its old name."""
+
+    def rename(self, old, new):
+        from images import tag_aliases
+        from images.models import Tag
+
+        tag = Tag.objects.get(organization=self.org, name=old)
+        target = Tag.objects.filter(organization=self.org, name=new).first()
+        tag_aliases.record_rename(self.org.pk, old, new)
+        if target is None:
+            tag.name = new
+            tag.save()
+        else:  # merge
+            ImageTag.objects.filter(tag=tag).exclude(image__in=ImageTag.objects.filter(tag=target).values("image")) \
+                .update(tag=target)
+            tag.delete()
+
+    def tags_of(self, external_id):
+        return sorted(ImageTag.objects.filter(image__external_id=external_id).values_list("tag__name", flat=True))
+
+    def test_old_name_from_source_lands_on_renamed_tag(self):
+        from images.models import Tag
+
+        self.register(self.item())
+        self.rename("delivery:D-7", "delivery:d7")
+
+        [again] = self.register(self.item())  # the source still sends "delivery:D-7"
+        self.assertEqual(again["status"], "unchanged", again)
+        self.register(self.item(external_id="sample-2", storage_key="images/t1/2026/10/sample-2.jpg"))
+
+        self.assertFalse(Tag.objects.filter(organization=self.org, name="delivery:D-7").exists())
+        self.assertEqual(self.tags_of("sample-1"), ["delivery:d7", "tenant:t1"])
+        self.assertEqual(self.tags_of("sample-2"), ["delivery:d7", "tenant:t1"])
+
+    def test_merge_and_chained_renames(self):
+        from images.models import Tag
+
+        Tag.objects.create(organization=self.org, name="delivery:7")
+        self.register(self.item())
+        self.rename("delivery:D-7", "delivery:7")   # merge
+        self.rename("delivery:7", "delivery-007")   # then rename the merged tag
+
+        self.register(self.item(external_id="sample-2", storage_key="images/t1/2026/10/sample-2.jpg"))
+        self.assertEqual(self.tags_of("sample-2"), ["delivery-007", "tenant:t1"])
+        self.assertEqual(sorted(Tag.objects.filter(organization=self.org).values_list("name", flat=True)),
+                         ["delivery-007", "tenant:t1"])
+
+    def test_case_only_rename_and_deleted_target(self):
+        from images import tag_aliases
+        from images.models import Tag
+
+        self.register(self.item())
+        self.rename("tenant:t1", "Tenant:T1")
+        self.register(self.item(external_id="sample-2", storage_key="images/t1/2026/10/sample-2.jpg"))
+        self.assertEqual(self.tags_of("sample-2"), ["Tenant:T1", "delivery:D-7"])
+
+        # Deleting the tag ends the alias: the source's name is a new tag again.
+        tag_aliases.forget_target(self.org.pk, "Tenant:T1")
+        Tag.objects.filter(organization=self.org, name="Tenant:T1").delete()
+        self.register(self.item(external_id="sample-3", storage_key="images/t1/2026/10/sample-3.jpg"))
+        self.assertEqual(self.tags_of("sample-3"), ["delivery:D-7", "tenant:t1"])
