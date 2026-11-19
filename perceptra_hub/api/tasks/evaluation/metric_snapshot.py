@@ -63,7 +63,8 @@ def create_daily_snapshots():
             )
             
             
-            check_metric_alerts.delay(project.id, snapshot.id)
+            # Explicit queue: names without "queue:" route to "celery", which no worker reads.
+            check_metric_alerts.apply_async((project.id, snapshot.id), queue='evaluation')
 
             results['snapshots_created'] += 1
             results['total_projects'] += 1
