@@ -1,11 +1,8 @@
-import time
-from fastapi.routing import APIRoute
 from fastapi import APIRouter, Depends, HTTPException
 from users.auth import get_current_user
-from fastapi import Request, Response
 from augmentations.models import Augmentation, AugmentationParameterAssignment
 from pydantic import BaseModel
-from typing import List, Optional, Callable
+from typing import List, Optional
 
 router = APIRouter()
 
@@ -28,24 +25,7 @@ class AugmentationResponse(BaseModel):
 
 DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-class TimedRoute(APIRoute):
-    def get_route_handler(self) -> Callable:
-        original_route_handler = super().get_route_handler()
-        async def custom_route_handler(request: Request) -> Response:
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            print(f"route duration: {duration}")
-            print(f"route response: {response}")
-            print(f"route response headers: {response.headers}")
-            return response
-
-        return custom_route_handler
-
-
 router = APIRouter(
-    route_class=TimedRoute,
     responses={404: {"description": "Not found"}},
 )
 

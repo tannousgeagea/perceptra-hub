@@ -6,11 +6,10 @@ FastAPI endpoint using Django ORM for retrieving evaluated annotations.
 Optimized queries with select_related, prefetch_related for N+1 prevention.
 """
 
+import logging
 import orjson
-import time
-from fastapi.routing import APIRoute
-from fastapi import Request, Response, Depends
-from typing import List, Optional, Dict, Any, Callable
+from fastapi import Depends
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from uuid import UUID
 from enum import Enum
@@ -28,6 +27,8 @@ from asgiref.sync import sync_to_async
 
 from annotations.models import Annotation, AnnotationAudit, ProjectImage, AnnotationClass
 from projects.models import Project
+
+logger = logging.getLogger(__name__)
 from api.routers.evaluation.schemas import *
 from api.routers.evaluation.cache import get_evaluation_cache, CacheKeyBuilder
 from api.dependencies import RequestContext, get_request_context
@@ -535,22 +536,7 @@ def transform_image_to_response(
 # API ROUTER
 # ============================================================================
 
-class TimedRoute(APIRoute):
-    def get_route_handler(self) -> Callable:
-        original_route_handler = super().get_route_handler()
-        async def custom_route_handler(request: Request) -> Response:
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            print(f"route duration: {duration}")
-            print(f"route response: {response}")
-            print(f"route response headers: {response.headers}")
-            return response
-
-        return custom_route_handler
-
-router = APIRouter(prefix="/evaluation", route_class=TimedRoute)
+router = APIRouter(prefix="/evaluation")
 
 
 @router.get(
@@ -627,7 +613,7 @@ async def get_project_evaluation(
                     image_summaries.append(img_response.evaluation)
             except Exception as e:
                 # Log but don't fail entire request for one bad image
-                print(f"Error transforming image {img_data.image_id}: {e}")
+                logger.warning("Skipping image %s in evaluation results: %s", img_data.image_id, e)
                 continue
         
         # Compute dataset summary

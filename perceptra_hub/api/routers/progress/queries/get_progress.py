@@ -1,42 +1,22 @@
 import os
 import json
-import time
 import uuid
 import importlib
 import django
 django.setup()
 from pathlib import Path
 from fastapi import Body
-from fastapi import Request
 from datetime import datetime
 from pydantic import BaseModel
 from django.core.cache import cache
 from fastapi import HTTPException, status
-from fastapi.routing import APIRoute
 from starlette.responses import JSONResponse
-from fastapi import FastAPI, Depends, APIRouter, Request, Header, Response
-from typing import Callable, Union, Any, Dict, AnyStr, Optional, List
+from fastapi import FastAPI, Depends, APIRouter, Header
+from typing import Union, Any, Dict, AnyStr, Optional, List
 from common_utils.progress.core import get_progress
 from users.auth import get_current_user
 
-class TimedRoute(APIRoute):
-    def get_route_handler(self) -> Callable:
-        original_route_handler = super().get_route_handler()
-
-        async def custom_route_handler(request: Request) -> Response:
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            print(f"route duration: {duration}")
-            print(f"route response: {response}")
-            print(f"route response headers: {response.headers}")
-            return response
-
-        return custom_route_handler
-    
 router = APIRouter(
-    route_class=TimedRoute,
     responses={404: {"description": "Not found"}},
 )
 

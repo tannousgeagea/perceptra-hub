@@ -64,6 +64,10 @@ def create_app() -> FastAPI:
     from api.middleware.realtime_middleware import RealtimeMiddleware
     app.add_middleware(RealtimeMiddleware)
 
+    # Added last, so it runs outermost and times the whole request.
+    from api.middleware.response_time import ResponseTimeMiddleware
+    app.add_middleware(ResponseTimeMiddleware)
+
     app.celery_app = celery_app
 
     for R in ROUTERS:

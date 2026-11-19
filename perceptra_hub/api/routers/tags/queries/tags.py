@@ -1,30 +1,14 @@
 # routes/models.py
-import time
 from datetime import datetime
-from typing import Callable, Optional
-from fastapi import Request, Response
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from api.dependencies import RequestContext, get_request_context, require_permission
-from fastapi.routing import APIRoute
 from typing import List
 from pydantic import BaseModel
 from ml_models.models import ModelTag
 
-class TimedRoute(APIRoute):
-    def get_route_handler(self) -> Callable:
-        original_route_handler = super().get_route_handler()
-        async def custom_route_handler(request: Request) -> Response:
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            return response
-
-        return custom_route_handler
-
 
 router = APIRouter(
-    route_class=TimedRoute,
     responses={404: {"description": "Not found"}},
 )
 

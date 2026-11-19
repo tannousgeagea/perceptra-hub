@@ -1,14 +1,11 @@
 
 import os
-import time
 import django
 django.setup()
 from fastapi import APIRouter, Depends, Query
 from fastapi import FastAPI, HTTPException, status
-from fastapi import Request, Response
 from pydantic import BaseModel
-from fastapi.routing import APIRoute
-from typing import Callable, Optional
+from typing import Optional
 from typing import List, Optional
 import datetime
 from fastapi import status as http_status
@@ -24,21 +21,8 @@ from annotations.models import (
 
 from projects.models import Project
 
-class TimedRoute(APIRoute):
-    def get_route_handler(self) -> Callable:
-        original_route_handler = super().get_route_handler()
-        async def custom_route_handler(request: Request) -> Response:
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            return response
-
-        return custom_route_handler
-
 router = APIRouter(
     prefix="/projects",
-    route_class=TimedRoute,
 )
 
 @router.delete(

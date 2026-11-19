@@ -1,7 +1,6 @@
 
 import os
 import cv2
-import time
 import random
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,35 +8,17 @@ from asgiref.sync import sync_to_async
 from ml_models.models import ModelVersion
 from api.dependencies import RequestContext, require_permission
 from datetime import datetime
-from typing import Callable, Optional
-from fastapi import Request
-from fastapi import Response
+from typing import Optional
 from django.db.models import F
-from fastapi.routing import APIRoute, APIRouter
+from fastapi.routing import APIRouter
 from django.db import transaction
 from fastapi import UploadFile, File
 import requests
-
-class TimedRoute(APIRoute):
-    def get_route_handler(self) -> Callable:
-        original_route_handler = super().get_route_handler()
-        async def custom_route_handler(request: Request) -> Response:
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            print(f"route duration: {duration}")
-            print(f"route response: {response}")
-            print(f"route response headers: {response.headers}")
-            return response
-
-        return custom_route_handler
 
 
 INFERENCE_SERVICE_URL = os.getenv("INFERENCE_SERVICE_URL", os.getenv("REMOTE_INFERENCE_URL", ""))
 
 router = APIRouter(
-    route_class=TimedRoute,
     responses={404: {"description": "Not found"}},
 )
 

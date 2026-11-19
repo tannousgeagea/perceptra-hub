@@ -2,9 +2,7 @@
 FastAPI route for deleting a job.
 """
 
-import time
-from fastapi.routing import APIRoute
-from fastapi import Request, Response, APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
 from asgiref.sync import sync_to_async
 import logging
@@ -15,23 +13,8 @@ from projects.models import ProjectImage
 
 logger = logging.getLogger(__name__)
 
-class TimedRoute(APIRoute):
-    def get_route_handler(self):
-        original_route_handler = super().get_route_handler()
-
-        async def custom_route_handler(request: Request):
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            return response
-
-        return custom_route_handler
-
-
 router = APIRouter(
     prefix="/projects",
-    route_class=TimedRoute
 )
 
 
