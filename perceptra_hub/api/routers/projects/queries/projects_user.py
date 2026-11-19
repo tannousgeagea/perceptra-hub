@@ -1,4 +1,3 @@
-import time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from pydantic import BaseModel, Field
@@ -6,9 +5,6 @@ from django.db.models import Count
 from asgiref.sync import sync_to_async
 from users.models import CustomUser as User
 from projects.models import Project, ProjectImage
-from fastapi.routing import APIRoute
-from fastapi import Request, Response
-from typing import Callable
 from api.dependencies import get_request_context, RequestContext
 from api.routers.projects.schemas import ProjectListItem
 from api.routers.projects.serializers import serialize_project, with_list_data
@@ -17,18 +13,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class TimedRoute(APIRoute):
-    def get_route_handler(self) -> Callable:
-        original_route_handler = super().get_route_handler()
-        async def custom_route_handler(request: Request) -> Response:
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            return response
-        return custom_route_handler
-
-router = APIRouter(route_class=TimedRoute)
+router = APIRouter()
 
 @sync_to_async
 def get_user_projects(user: User, organization, include_inactive: bool = False, org_role: Optional[str] = None):

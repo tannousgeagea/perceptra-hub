@@ -1,15 +1,12 @@
 import os
 import cv2
-import time
 import random
 import numpy as np
 from fastapi import APIRouter, HTTPException, status, Depends
 from datetime import datetime
-from typing import Callable, Optional
-from fastapi import Request
-from fastapi import Response
+from typing import Optional
 from django.db.models import F
-from fastapi.routing import APIRoute, APIRouter
+from fastapi.routing import APIRouter
 from ml_models.models import ModelVersion
 from annotations.models import Annotation, AnnotationGroup, AnnotationClass
 from inferences.models import PredictionImageResult, PredictionOverlay
@@ -17,23 +14,7 @@ from common_utils.metrics.utils import annotation_to_box, ap_per_class
 from common_utils.detection.utils import box_iou_batch
 from api.dependencies import RequestContext, get_request_context
 
-class TimedRoute(APIRoute):
-    def get_route_handler(self) -> Callable:
-        original_route_handler = super().get_route_handler()
-        async def custom_route_handler(request: Request) -> Response:
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            print(f"route duration: {duration}")
-            print(f"route response: {response}")
-            print(f"route response headers: {response.headers}")
-            return response
-
-        return custom_route_handler
-    
 router = APIRouter(
-    route_class=TimedRoute,
     responses={404: {"description": "Not found"}},
 )
 

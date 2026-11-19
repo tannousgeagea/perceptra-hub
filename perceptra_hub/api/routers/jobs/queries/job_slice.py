@@ -4,9 +4,7 @@
 """
 FastAPI routes for project and job management.
 """
-import time
-from fastapi.routing import APIRoute
-from fastapi import Request, Response, Body
+from fastapi import Body
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import Optional, List
 import logging
@@ -24,22 +22,8 @@ from api.routers.jobs.schemas import JobSplitRequest
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
-class TimedRoute(APIRoute):
-    def get_route_handler(self):
-        original_route_handler = super().get_route_handler()
-
-        async def custom_route_handler(request):
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            return response
-
-        return custom_route_handler
-
 router = APIRouter(
     prefix="/projects",
-    route_class=TimedRoute
 )
 
 @router.post(

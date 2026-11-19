@@ -1,11 +1,9 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
-from typing import Optional, List, Callable
+from typing import Optional, List
 import django
-import time
 from asgiref.sync import sync_to_async
-from fastapi import Request, Response
-from fastapi.routing import APIRoute, APIRouter
+from fastapi.routing import APIRouter
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import transaction
 import os
@@ -18,24 +16,7 @@ from organizations.models import Organization
 from memberships.models import ProjectMembership, Role
 from api.dependencies import get_request_context, RequestContext
 
-class TimedRoute(APIRoute):
-    def get_route_handler(self) -> Callable:
-        original_route_handler = super().get_route_handler()
-        async def custom_route_handler(request: Request) -> Response:
-            before = time.time()
-            response: Response = await original_route_handler(request)
-            duration = time.time() - before
-            response.headers["X-Response-Time"] = str(duration)
-            print(f"route duration: {duration}")
-            print(f"route response: {response}")
-            print(f"route response headers: {response.headers}")
-            return response
-
-        return custom_route_handler
-
-
 router = APIRouter(
-    route_class=TimedRoute,
     responses={404: {"description": "Not found"}},
 )
 
