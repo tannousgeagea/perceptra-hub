@@ -11,6 +11,9 @@ kind is "image" or "model". Tags belong to the organization, so a change made
 from a project's view applies everywhere. Reading: any member (a project's
 view: the project's view permission). Changing: org editor and up.
 
+Renaming or merging an image tag records an alias (images/tag_aliases.py), so an
+ingest source that still sends the old name lands on the renamed tag.
+
 Tags the platform sets itself keep their name: "archived" (similarity archive)
 and "baseline" (model versions). They can be recoloured and described, not
 renamed, merged or deleted, and no other tag can take their name.
@@ -25,6 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from api.dependencies import RequestContext, get_request_context, require_permission
+from images import tag_aliases
 from images.models import ImageTag, Tag
 from ml_models.models import ModelTag
 from projects.dependencies import require_project_permission
@@ -189,8 +193,12 @@ def update_managed_tag(
                             "existing": _usage_of(kind, other).model_dump(),
                         },
                     )
+                if kind == "image":
+                    tag_aliases.record_rename(ctx.organization.pk, tag.name, other.name)
                 _merge(kind, tag, other)
                 return _usage_of(kind, other)
+            if kind == "image":
+                tag_aliases.record_rename(ctx.organization.pk, tag.name, name)
             tag.name = name
 
         tag.save()
@@ -210,5 +218,7 @@ def delete_managed_tag(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail=f'"{tag.name}" is set by the platform and can\'t be deleted')
         usage = _usage_of(kind, tag).usage
+        if kind == "image":
+            tag_aliases.forget_target(ctx.organization.pk, tag.name)
         tag.delete()
     return {"deleted": tag_id, "removed_from": usage.model_dump()}

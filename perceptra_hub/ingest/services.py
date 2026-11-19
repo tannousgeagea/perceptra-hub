@@ -78,6 +78,8 @@ class _BatchCache:
     classes: Optional[Dict[str, Any]] = None
     types: Dict[str, Any] = field(default_factory=dict)
     tags: Dict[str, Any] = field(default_factory=dict)
+    # Renamed / merged tag names (images.tag_aliases), loaded once per batch.
+    tag_aliases: Optional[Dict[str, str]] = None
 
 
 def _bbox(values) -> List[float]:
@@ -316,10 +318,19 @@ def _upsert_image(organization, user, item: dict, profile, source_label: str, pr
 
 
 def _sync_tags(organization, user, image, tag_names: List[str], cache: _BatchCache) -> bool:
-    """The image's ingested tags become exactly `tag_names`; tags people added stay."""
+    """
+    The image's ingested tags become exactly `tag_names`; tags people added stay.
+    A name someone renamed or merged in the app lands on the tag's current name.
+    """
+    from images import tag_aliases
     from images.models import ImageTag
 
-    wanted = {t.strip()[:100] for t in tag_names or [] if t and t.strip()}
+    if cache.tag_aliases is None:
+        cache.tag_aliases = tag_aliases.load(organization.pk)
+    wanted = {
+        tag_aliases.resolve(cache.tag_aliases, t.strip()[:100])
+        for t in tag_names or [] if t and t.strip()
+    }
     previous = set(((image.meta_info or {}).get("_ingest") or {}).get("tags") or [])
     changed = False
     for name in wanted - previous:
