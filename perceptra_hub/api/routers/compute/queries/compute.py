@@ -359,55 +359,86 @@ async def add_fallback_provider(
     return {"message": "Fallback provider added successfully"}
 
 
+def _require_org_admin(ctx: RequestContext, what: str) -> None:
+    if not ctx.has_role('admin', 'owner'):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"Only organization admins can {what}")
+
+
+async def _test_provider(provider: ComputeProvider, credentials: Optional[Dict[str, Any]], organization) -> Dict[str, Any]:
+    """
+    A real connection test, by provider type:
+    - on-premise agents: are any of the organization's agents online?
+    - platform GPU/CPU: runs on this server, nothing to test (tested=False)
+    - cloud providers: call the provider with the credentials
+    Returns {tested, valid, message}.
+    """
+    from compute.adapters import get_adapter_for_provider
+
+    if provider.provider_type == 'on-premise-agent':
+        credentials = {'organization_id': str(organization.org_id)}
+    elif not provider.requires_user_credentials:
+        return {"tested": False, "valid": True,
+                "message": "Runs on this platform's own workers; there is no connection to test."}
+    elif not credentials:
+        return {"tested": False, "valid": False, "message": "Enter the provider's credentials first."}
+
+    try:
+        adapter = get_adapter_for_provider(provider)
+        result = await sync_to_async(adapter.validate_credentials)(credentials)
+    except Exception as e:  # the provider's own error is the useful message
+        return {"tested": True, "valid": False, "message": f"Connection failed: {e}"}
+    return {"tested": True, "valid": bool(result.get('valid')),
+            "message": result.get('message') or ("Connected" if result.get('valid') else "Connection failed")}
+
+
+class ProviderTestRequest(BaseModel):
+    credentials: Dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/providers/{provider_id}/validate")
+async def validate_provider_credentials(
+    provider_id: int,
+    data: ProviderTestRequest,
+    ctx: RequestContext = Depends(get_request_context)
+):
+    """
+    Test credentials for a provider before saving a profile (org admins).
+    Nothing is stored.
+    """
+    _require_org_admin(ctx, "test compute connections")
+    provider = await sync_to_async(ComputeProvider.objects.filter(id=provider_id, is_active=True).first)()
+    if provider is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Compute provider not found")
+    return await _test_provider(provider, data.credentials, ctx.organization)
+
+
 @router.get("/profiles/{profile_id}/validate")
 async def validate_profile_credentials(
     profile_id: str,
     ctx: RequestContext = Depends(get_request_context)
 ):
     """
-    Validate compute profile credentials.
-    Tests connection to provider with stored credentials.
+    Test a saved profile's connection with its stored credentials (org admins:
+    it decrypts and uses them).
     """
+    _require_org_admin(ctx, "test compute connections")
     profile = await get_profile_by_id(profile_id, ctx.organization)
-    
-    if not profile.user_credentials:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No credentials configured for this profile"
-        )
-    
-    # Decrypt and validate credentials
-    from cryptography.fernet import Fernet
-    from django.conf import settings
-    import json
-    
-    try:
-        cipher = Fernet(settings.COMPUTE_CREDENTIALS_KEY.encode())
-        decrypted = cipher.decrypt(
-            profile.user_credentials['encrypted'].encode()
-        )
-        credentials = json.loads(decrypted)
-        
-        # Test connection based on provider type
-        from compute.adapters import get_adapter_for_provider
-        adapter = get_adapter_for_provider(profile.provider)
-        
-        validation_result = await sync_to_async(adapter.validate_credentials)(
-            credentials
-        )
-        
-        return {
-            "valid": validation_result['valid'],
-            "message": validation_result.get('message', 'Credentials validated'),
-            "details": validation_result.get('details', {})
-        }
-        
-    except Exception as e:
-        return {
-            "valid": False,
-            "message": "Credential validation failed",
-            "error": str(e)
-        }
+    provider = await sync_to_async(lambda: profile.provider)()
+
+    credentials = None
+    if profile.user_credentials:
+        from cryptography.fernet import Fernet
+        from django.conf import settings
+        import json
+
+        try:
+            cipher = Fernet(settings.COMPUTE_CREDENTIALS_KEY.encode())
+            credentials = json.loads(cipher.decrypt(profile.user_credentials['encrypted'].encode()))
+        except Exception:
+            return {"tested": False, "valid": False,
+                    "message": "The saved credentials can't be read; save them again."}
+    return await _test_provider(provider, credentials, ctx.organization)
         
 @router.get("/recommendations")
 async def get_training_recommendations(
