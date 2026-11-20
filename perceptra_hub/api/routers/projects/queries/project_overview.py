@@ -219,8 +219,8 @@ def _monitoring(project) -> Dict[str, Any]:
     }
 
 
-@sync_to_async
-def _overview(project) -> Dict[str, Any]:
+def build_overview(project) -> Dict[str, Any]:
+    """Every stage of one project's pipeline (synchronous; also used by the organization home)."""
     stages = _data_and_annotation(project)
     reviewed_not_in_version = stages.pop("_reviewed_not_in_version")
     return {
@@ -240,4 +240,4 @@ async def project_overview(
     project_ctx: ProjectContext = Depends(get_project_context),
 ):
     """Every stage of the project's pipeline in one response (anyone who can open the project)."""
-    return await _overview(project_ctx.project)
+    return await sync_to_async(build_overview)(project_ctx.project)
