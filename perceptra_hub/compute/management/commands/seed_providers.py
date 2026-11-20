@@ -94,7 +94,9 @@ class Command(BaseCommand):
                 'provider_type': 'runpod',
                 'description': 'On-demand GPU cloud with competitive pricing',
                 'requires_user_credentials': True,
-                'is_active': True,
+                # Hidden: there is no RunPod adapter in compute/adapters.py yet,
+                # so a RunPod profile could never run a job. Activate with the adapter.
+                'is_active': False,
                 'system_config': {},
                 'available_instances': [
                     {'name': 'RTX 3090', 'vcpus': 8, 'memory_gb': 24, 'gpu_type': 'NVIDIA RTX 3090', 'gpu_count': 1, 'cost_per_hour': 0.44},
