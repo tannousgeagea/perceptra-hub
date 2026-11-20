@@ -34,10 +34,12 @@ class AlertThreshold:
             elif current_value > self.warning_threshold:
                 return 'warning'
         
-        # Check for drops (if previous value available)
+        # A worsening of more than 10% since the previous snapshot. Only the
+        # bad direction counts: a metric that improves is not an alert.
         if previous_value:
-            change_percent = abs((current_value - previous_value) / previous_value * 100)
-            if change_percent > 10:  # 10% drop
+            change_percent = (current_value - previous_value) / previous_value * 100
+            worsened = -change_percent if self.higher_is_better else change_percent
+            if worsened > 10:
                 return 'warning'
         
         return None
@@ -104,3 +106,64 @@ class AlertRuleEngine:
                 })
         
         return alerts
+
+
+# ── Per-project thresholds ────────────────────────────────────────────────
+# Stored in Project.settings["alert_thresholds"] as
+# {metric_name: {"warning": float, "critical": float}}; metrics not listed
+# use DEFAULT_THRESHOLDS. Direction (higher_is_better) is fixed per metric.
+
+SETTINGS_KEY = "alert_thresholds"
+
+
+def thresholds_for_project(project) -> List[AlertThreshold]:
+    saved = ((project.settings or {}) if project is not None else {}).get(SETTINGS_KEY) or {}
+    result = []
+    for default in AlertRuleEngine.DEFAULT_THRESHOLDS:
+        values = saved.get(default.metric_name) or {}
+        result.append(AlertThreshold(
+            metric_name=default.metric_name,
+            warning_threshold=float(values.get("warning", default.warning_threshold)),
+            critical_threshold=float(values.get("critical", default.critical_threshold)),
+            higher_is_better=default.higher_is_better,
+        ))
+    return result
+
+
+def validate_thresholds(values: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
+    """Checked values to store; raises ValueError with a readable message."""
+    defaults = {t.metric_name: t for t in AlertRuleEngine.DEFAULT_THRESHOLDS}
+    clean = {}
+    for metric, pair in values.items():
+        if metric not in defaults:
+            raise ValueError(f"Unknown metric '{metric}'")
+        try:
+            warning, critical = float(pair["warning"]), float(pair["critical"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(f"{metric}: warning and critical must both be numbers")
+        if not (0 <= warning <= 1 and 0 <= critical <= 1):
+            raise ValueError(f"{metric}: thresholds are rates between 0 and 1")
+        if defaults[metric].higher_is_better and critical > warning:
+            raise ValueError(f"{metric}: higher is better, so critical must be at or below warning")
+        if not defaults[metric].higher_is_better and critical < warning:
+            raise ValueError(f"{metric}: lower is better, so critical must be at or above warning")
+        clean[metric] = {"warning": warning, "critical": critical}
+    return clean
+
+
+def save_project_thresholds(project_id, values: Optional[Dict[str, Dict[str, float]]]) -> None:
+    """Replace the project's thresholds (None or {} = back to the defaults). Other settings stay."""
+    from django.db import transaction
+    from projects.models import Project
+
+    with transaction.atomic():
+        settings = (
+            Project.objects.select_for_update().filter(pk=project_id)
+            .values_list("settings", flat=True).first()
+        )
+        settings = dict(settings or {})
+        if values:
+            settings[SETTINGS_KEY] = values
+        else:
+            settings.pop(SETTINGS_KEY, None)
+        Project.objects.filter(pk=project_id).update(settings=settings)
