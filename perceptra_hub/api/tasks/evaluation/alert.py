@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from typing import List
 from celery import shared_task
 from datetime import datetime
 
@@ -32,8 +33,8 @@ def check_metric_alerts(project_id: int, snapshot_id: int):
     Called after each snapshot creation.
     """
     from temporal_analysis.models import MetricSnapshot, MetricAlert
-    from temporal_analysis.alerts import AlertRuleEngine
-    
+    from temporal_analysis.alerts import AlertRuleEngine, thresholds_for_project
+
     try:
         # Get current snapshot
         current = MetricSnapshot.objects.get(id=snapshot_id)
@@ -46,7 +47,8 @@ def check_metric_alerts(project_id: int, snapshot_id: int):
         ).order_by('-snapshot_date').first()
         
         # Evaluate alerts
-        engine = AlertRuleEngine()
+        # The project's own thresholds (Evaluation -> Alerts), defaults where unset.
+        engine = AlertRuleEngine(thresholds_for_project(current.project))
         alerts_to_create = engine.evaluate_snapshot(current, previous)
         
         created_alerts = []

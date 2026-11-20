@@ -8,7 +8,7 @@ DELETE /api/v1/models/{model_id}/retraining-policies/{policy_id}
 POST  /api/v1/models/{model_id}/retraining-policies/{policy_id}/trigger
 """
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -20,9 +20,13 @@ from training.models import RetrainingPolicy
 
 router = APIRouter()
 
+# RetrainingPolicy.TRIGGER_CHOICES; "alert" = an unacknowledged critical
+# monitoring alert on the model (see training/retraining_service.py).
+TriggerType = Literal["annotation_count", "correction_rate", "time_elapsed", "combined", "alert"]
+
 
 class RetrainingPolicyCreate(BaseModel):
-    trigger_type: str = "annotation_count"
+    trigger_type: TriggerType = "annotation_count"
     min_new_annotations: int = Field(default=100, ge=1)
     min_correction_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     max_days_since_training: Optional[int] = Field(default=None, ge=1)
@@ -34,7 +38,7 @@ class RetrainingPolicyCreate(BaseModel):
 
 
 class RetrainingPolicyUpdate(BaseModel):
-    trigger_type: Optional[str] = None
+    trigger_type: Optional[TriggerType] = None
     min_new_annotations: Optional[int] = Field(default=None, ge=1)
     min_correction_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     max_days_since_training: Optional[int] = Field(default=None, ge=1)

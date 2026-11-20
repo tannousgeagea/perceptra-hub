@@ -68,6 +68,11 @@ class RetrainingService:
                 triggered = True
                 reason = "max_days_since_training_exceeded"
 
+        if not triggered and policy.trigger_type == "alert":
+            if self._check_alert(policy):
+                triggered = True
+                reason = "critical_monitoring_alert"
+
         if not triggered:
             return None
 
@@ -140,6 +145,24 @@ class RetrainingService:
         logger.debug("Policy %s: age_days=%d max_days=%d",
                      policy.policy_id, age_days, policy.max_days_since_training)
         return age_days >= policy.max_days_since_training
+
+    def _check_alert(self, policy: RetrainingPolicy) -> bool:
+        """
+        A critical alert nobody acknowledged yet, on one of this model's
+        versions, raised since the policy last ran (or within lookback_days).
+        Acknowledging an alert means "seen, don't act on it".
+        """
+        from temporal_analysis.models import MetricAlert
+
+        since = policy.last_triggered_at or (timezone.now() - timedelta(days=policy.lookback_days))
+        found = MetricAlert.objects.filter(
+            model_version__model=policy.model,
+            severity="critical",
+            is_acknowledged=False,
+            alert_date__gt=since,
+        ).exists()
+        logger.debug("Policy %s: critical alert since %s: %s", policy.policy_id, since, found)
+        return found
 
     # ------------------------------------------------------------------
     # Trigger action

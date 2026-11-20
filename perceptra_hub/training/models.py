@@ -343,6 +343,8 @@ class RetrainingPolicy(models.Model):
         ('correction_rate', 'Prediction Correction Rate'),
         ('time_elapsed', 'Time Since Last Training'),
         ('combined', 'Combined Conditions'),
+        # An unacknowledged critical monitoring alert on the model since the last run.
+        ('alert', 'Monitoring Alert'),
     ]
 
     policy_id = models.CharField(
