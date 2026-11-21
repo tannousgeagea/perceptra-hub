@@ -3,6 +3,7 @@ from typing import Optional, List, Dict
 from pydantic import BaseModel
 from django.utils.timezone import localtime
 from training.models import TrainingSession, TrainingCheckpoint
+from training.epochs import best_epoch, epoch_seconds, stalled_for
 from api.dependencies import get_request_context, RequestContext
 from asgiref.sync import sync_to_async
 
@@ -42,6 +43,20 @@ class TrainingSessionOut(BaseModel):
     errorMessage: Optional[str]
     errorTraceback: Optional[str]
     epochMetrics: List[EpochMetric]
+    # Live view
+    etaSeconds: Optional[float] = None
+    secondsPerEpoch: Optional[float] = None
+    lastEpochAt: Optional[str] = None
+    # Set while running when no epoch arrived for unusually long.
+    stalledSeconds: Optional[float] = None
+    # The best epoch on the headline metric (mAP if present, else a loss).
+    bestEpoch: Optional[Dict] = None
+    # For "Compare with production" once it finishes.
+    projectId: Optional[str] = None
+    modelId: Optional[str] = None
+    versionStatus: Optional[str] = None
+    productionVersionId: Optional[str] = None
+    productionVersionName: Optional[str] = None
     # Keep for backward compat with frontend hooks
     model_version: Optional[Dict]
 
@@ -85,6 +100,17 @@ def _get_checkpoints(session):
     )
 
 
+# The metric the "best epoch" is judged on, first one present wins.
+HEADLINE_KEYS = ("mAP50", "mAP50-95", "val_loss", "train_loss")
+
+
+@sync_to_async
+def _production(model, version_id):
+    prod = (model.versions.filter(is_deleted=False, deployment_status="production")
+            .exclude(version_id=version_id).order_by("-deployed_at").first())
+    return prod
+
+
 @router.get("/training-sessions/{session_id}")
 async def get_training_session(
     session_id: int,
@@ -98,9 +124,22 @@ async def get_training_session(
     model = mv.model
     project = model.project
 
-    # Build epoch metrics from checkpoints first; fall back to current_metrics list
+    # Epochs: the recorded history first, then checkpoints, then the old list form.
     epoch_metrics: List[EpochMetric] = []
-    if checkpoints:
+    history = session.epoch_history or []
+    headline = next((k for k in HEADLINE_KEYS if any(k in (e.get("metrics") or {}) for e in history)), None)
+    best = best_epoch(session, headline) if headline else None
+    if history:
+        for e in history:
+            epoch_metrics.append(
+                EpochMetric(
+                    epoch=e.get("epoch") or 0,
+                    timestamp=e.get("at") or localtime(session.updated_at).isoformat(),
+                    is_best=best is not None and e.get("epoch") == best.get("epoch"),
+                    metrics=e.get("metrics") or {},
+                )
+            )
+    elif checkpoints:
         for cp in checkpoints:
             epoch_metrics.append(
                 EpochMetric(
@@ -128,6 +167,9 @@ async def get_training_session(
                     },
                 )
             )
+
+    stalled = stalled_for(session)
+    production = await _production(model, mv.version_id)
 
     # Resolve current metrics (latest value if list)
     current_metrics = session.current_metrics
@@ -168,5 +210,17 @@ async def get_training_session(
         errorMessage=session.error_message or None,
         errorTraceback=session.error_traceback or None,
         epochMetrics=epoch_metrics,
+        etaSeconds=(session.estimated_time_remaining.total_seconds()
+                    if session.estimated_time_remaining and session.status == "running" else None),
+        secondsPerEpoch=epoch_seconds(session),
+        lastEpochAt=history[-1].get("at") if history else None,
+        stalledSeconds=stalled.total_seconds() if stalled else None,
+        bestEpoch=({"epoch": best["epoch"], "metric": headline, "value": best["metrics"][headline]}
+                   if best else None),
+        projectId=str(project.project_id),
+        modelId=model.model_id,
+        versionStatus=mv.status,
+        productionVersionId=production.version_id if production else None,
+        productionVersionName=(production.version_name or f"v{production.version_number}") if production else None,
         model_version={"id": mv.id, "version": mv.version_name},
     )

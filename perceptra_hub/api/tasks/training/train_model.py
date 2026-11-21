@@ -9,6 +9,7 @@ import logging
 import traceback
 from pathlib import Path
 from training.trainers.base import TrainingCallbacks
+from training.epochs import publish_status
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,8 @@ def train_model_on_platform_gpu(
         training_session.status = 'running'
         training_session.total_epochs = training_config.epochs
         training_session.save()
-        
+        publish_status(training_session)
+
         logger.info("Starting training execution")
         result = trainer.train()
         
@@ -165,7 +167,8 @@ def train_model_on_platform_gpu(
         training_session.best_metrics = result.best_metrics.to_dict()
         training_session.current_metrics = result.final_metrics.to_dict()
         training_session.save()
-        
+        publish_status(training_session)
+
         logger.info(f"Training completed successfully for job {job_id}")
 
         return {
@@ -185,6 +188,7 @@ def train_model_on_platform_gpu(
             training_session.error_traceback = error_trace
             training_session.completed_at = timezone.now()
             training_session.save()
+            publish_status(training_session)
             model_version.status = 'failed'
             model_version.error_message = error_msg
             model_version.save()
@@ -205,6 +209,7 @@ def train_model_on_platform_gpu(
             training_session.error_traceback = error_trace
             training_session.completed_at = timezone.now()
             training_session.save()
+            publish_status(training_session)
 
             model_version.status = 'failed'
             model_version.error_message = error_msg
@@ -247,32 +252,11 @@ class PlatformTrainingCallbacks(TrainingCallbacks):
             pass
 
     def on_epoch_end(self, epoch: int, metrics):
-        """Called after each epoch"""
-        from training.models import TrainingSession
-        
-        # Update progress in database
-        self.training_session.current_epoch = epoch
-        self.training_session.progress = (
-            (epoch / self.training_session.total_epochs) * 100
-            if self.training_session.total_epochs > 0
-            else 0
-        )
-        self.training_session.current_metrics = metrics.to_dict()
-        
-        # Update best metrics if this is better
-        if not self.training_session.best_metrics:
-            self.training_session.best_metrics = metrics.to_dict()
-        else:
-            # Simple logic: lower loss is better
-            current_loss = metrics.val_loss or metrics.train_loss
-            best_loss = self.training_session.best_metrics.get('val_loss') or \
-                       self.training_session.best_metrics.get('train_loss')
-            
-            if current_loss < best_loss:
-                self.training_session.best_metrics = metrics.to_dict()
-        
-        self.training_session.save()
-        
+        """Called after each epoch: history, best metrics, ETA and the live event."""
+        from training.epochs import record_epoch
+
+        record_epoch(self.training_session, epoch, metrics.to_dict())
+
         # Update Celery task state for frontend polling
         self.celery_task.update_state(
             state='PROGRESS',

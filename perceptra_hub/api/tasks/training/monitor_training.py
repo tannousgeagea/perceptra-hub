@@ -11,6 +11,7 @@ from celery import shared_task
 
 from compute.models import TrainingJob
 from compute.adapters import get_adapter_for_provider
+from training.epochs import clean_metrics, publish_status, record_epoch
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +50,13 @@ class TrainingMonitor:
                 session.status = new_status
                 session.progress = status_info['progress']
                 
-                if status_info.get('metrics'):
-                    session.current_metrics = status_info['metrics']
-                
+                metrics = status_info.get('metrics') or {}
+                epoch = metrics.get('epoch')
+                if isinstance(epoch, (int, float)) and not isinstance(epoch, bool) and epoch >= 1:
+                    record_epoch(session, int(epoch), metrics)
+                elif metrics:
+                    session.current_metrics = clean_metrics(metrics)
+
                 if new_status == 'failed' and status_info.get('error'):
                     session.error_message = status_info['error']
                 
@@ -59,8 +64,9 @@ class TrainingMonitor:
                     session.completed_at = timezone.now()
                     training_job.completed_at = timezone.now()
                     training_job.save()
-                
+
                 session.save()
+                publish_status(session)
                 
         except Exception as e:
             logger.error(f"Failed to sync job {training_job.job_id}: {e}")

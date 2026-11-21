@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, Dict
 from pydantic import BaseModel
 from training.models import TrainingSession
+from training.epochs import publish_status, record_epoch
 from django.utils import timezone
 from api.dependencies import get_request_context, require_permission, RequestContext
 from asgiref.sync import sync_to_async
@@ -36,6 +37,7 @@ def _apply_update(session_id: int, data: TrainingUpdate, organization):
         raise HTTPException(status_code=403, detail="Access denied to this training session")
 
     now = timezone.now()
+    old_status = session.status
 
     if data.status:
         if data.status not in VALID_STATUSES:
@@ -66,30 +68,18 @@ def _apply_update(session_id: int, data: TrainingUpdate, organization):
         session.log_file_key = data.log_path
     if data.logs:
         session.log_summary = (session.log_summary or "") + data.logs + "\n"
-    if data.metrics:
-        if not isinstance(session.current_metrics, list):
-            session.current_metrics = []
-        session.current_metrics.append(data.metrics)
-        # Update best_metrics
-        if not session.best_metrics:
-            session.best_metrics = data.metrics
-        else:
-            updated_best = dict(session.best_metrics)
-            for key, value in data.metrics.items():
-                if not isinstance(value, (int, float)):
-                    continue
-                current_best = updated_best.get(key)
-                if current_best is None:
-                    updated_best[key] = value
-                elif key.startswith("loss") or key.endswith("_loss"):
-                    if value < current_best:
-                        updated_best[key] = value
-                else:
-                    if value > current_best:
-                        updated_best[key] = value
-            session.best_metrics = updated_best
-
+    status_changed = bool(data.status) and data.status != old_status
     session.save()
+
+    if data.metrics:
+        # The epoch: as given, else in the metrics, else the one after the last recorded.
+        epoch = data.current_epoch or data.metrics.get("epoch")
+        if not isinstance(epoch, (int, float)) or isinstance(epoch, bool) or epoch < 1:
+            history = session.epoch_history or []
+            epoch = (history[-1]["epoch"] + 1) if history else 1
+        record_epoch(session, int(epoch), data.metrics)
+    if status_changed:
+        publish_status(session)
     return session
 
 

@@ -16,6 +16,7 @@ from django.db import transaction
 
 from compute.models import Agent, AgentAPIKey, TrainingJob
 from training.models import TrainingSession
+from training.epochs import clean_metrics, publish_status, record_epoch
 
 logger = logging.getLogger(__name__)
 
@@ -411,10 +412,18 @@ class AgentManager:
                 session.progress = progress
                 update_fields.append('progress')
             
-            if metrics:
-                session.metrics = {**session.metrics, **metrics}
-                update_fields.append('metrics')
-            
+            # An epoch report goes to the run's history (and the live stream);
+            # metrics without an epoch number only replace the latest values.
+            # (This used to write session.metrics, which doesn't exist.)
+            epoch = metrics.get('epoch') if metrics else None
+            if isinstance(epoch, (int, float)) and not isinstance(epoch, bool) and epoch >= 1:
+                total = metrics.get('total_epochs')
+                record_epoch(session, int(epoch), metrics,
+                             total_epochs=int(total) if isinstance(total, (int, float)) and total > 0 else None)
+            elif metrics:
+                session.current_metrics = clean_metrics(metrics)
+                update_fields.append('current_metrics')
+
             if error and session.error_message != error:
                 session.error_message = error
                 update_fields.append('error_message')
@@ -430,7 +439,9 @@ class AgentManager:
             if update_fields:
                 update_fields.append('updated_at')
                 session.save(update_fields=update_fields)
-            
+                if 'status' in update_fields:
+                    publish_status(session)
+
             logger.debug(f"Updated job {job_id}: {status} ({progress}%)")
             
         except TrainingJob.DoesNotExist:
@@ -463,13 +474,16 @@ class AgentManager:
                 session.progress = 100.0 if success else session.progress
                 session.completed_at = timezone.now()
                 if final_metrics:
-                    session.current_metrics = {**(session.current_metrics or {}), **final_metrics}
+                    # Older runs kept current_metrics as a list of epochs.
+                    latest = session.current_metrics if isinstance(session.current_metrics, dict) else {}
+                    session.current_metrics = {**latest, **final_metrics}
 
                 if error:
                     session.error_message = error
 
                 session.save()
-                
+                publish_status(session)  # sent when the transaction commits
+
                 # Update model version with artifacts
                 if success and artifacts:
                     # Keep only the keys this job could have uploaded (see
