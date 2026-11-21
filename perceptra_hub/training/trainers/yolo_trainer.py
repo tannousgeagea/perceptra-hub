@@ -202,20 +202,38 @@ class YOLOTrainer(BaseTrainer):
             raw = {
                 'train_loss': float(yolo_trainer_obj.loss) if hasattr(yolo_trainer_obj, 'loss') else 0.0,
             }
+            # Per-component train losses (box/cls/dfl), averaged over the epoch.
+            try:
+                items = yolo_trainer_obj.label_loss_items(yolo_trainer_obj.tloss, prefix='train')
+                raw.update({k: float(v) for k, v in (items or {}).items()})
+                parts = [v for k, v in (items or {}).items() if k.endswith('_loss')]
+                if parts:
+                    raw['train_loss'] = float(sum(parts))
+            except Exception:
+                pass
+            # Validation metrics and losses of *this* epoch: the hook runs after validation.
             if hasattr(yolo_trainer_obj, 'metrics') and yolo_trainer_obj.metrics:
                 raw.update({k: float(v) for k, v in yolo_trainer_obj.metrics.items()
                             if isinstance(v, (int, float)) and math.isfinite(float(v))})
+                val_parts = [float(v) for k, v in yolo_trainer_obj.metrics.items()
+                             if k.startswith('val/') and k.endswith('_loss')]
+                if val_parts:
+                    raw['val_loss'] = sum(val_parts)
+            raw = {k: v for k, v in raw.items() if math.isfinite(v)}
             self._call_progress(epoch, total, raw)
             # Also drive the standard epoch callback so DB is updated each epoch
             epoch_metrics = TrainingMetrics(
                 epoch=epoch,
                 train_loss=raw.get('train_loss', 0.0),
-                metrics={k: v for k, v in raw.items() if k != 'train_loss'},
+                val_loss=raw.get('val_loss'),
+                metrics={k: v for k, v in raw.items() if k not in ('train_loss', 'val_loss')},
                 learning_rate=self.config.learning_rate,
             )
             self.callbacks.on_epoch_end(epoch, epoch_metrics)
 
-        self.model.add_callback('on_train_epoch_end', _on_epoch_end)
+        # on_fit_epoch_end fires after validation, so each epoch carries its own
+        # mAP (on_train_epoch_end fired before it and recorded the previous one).
+        self.model.add_callback('on_fit_epoch_end', _on_epoch_end)
 
         # Train model
         results = self.model.train(**train_args)

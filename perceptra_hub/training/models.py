@@ -93,7 +93,12 @@ class TrainingSession(models.Model):
         blank=True,
         help_text=_('Best metrics achieved during training')
     )
-    
+    epoch_history = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=_('One entry per finished epoch: {"epoch", "at", "metrics"}; written by training.epochs.record_epoch')
+    )
+
     # Logging (storage keys, not Django files)
     log_summary = models.TextField(
         blank=True,
@@ -200,30 +205,10 @@ class TrainingSession(models.Model):
         return presigned.url
     
     def update_progress(self, epoch: int, metrics: dict = None):
-        """Update training progress"""
-        self.current_epoch = epoch
-        if self.total_epochs > 0:
-            self.progress = (epoch / self.total_epochs) * 100
-        
-        if metrics:
-            self.current_metrics = metrics
-            
-            # Update best metrics
-            if not self.best_metrics:
-                self.best_metrics = metrics
-            else:
-                # Example: update if current is better (customize per metric)
-                for key, value in metrics.items():
-                    if key.startswith('loss'):
-                        # Lower is better for loss
-                        if value < self.best_metrics.get(key, float('inf')):
-                            self.best_metrics[key] = value
-                    else:
-                        # Higher is better for accuracy, mAP, etc.
-                        if value > self.best_metrics.get(key, 0):
-                            self.best_metrics[key] = value
-        
-        self.save()
+        """Record a finished epoch (see training.epochs.record_epoch)."""
+        from training.epochs import record_epoch
+
+        record_epoch(self, epoch, metrics or {})
     
     def mark_failed(self, error_message: str, traceback: str = None):
         """Mark training as failed"""
