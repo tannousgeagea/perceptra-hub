@@ -39,6 +39,11 @@ def _apply_update(session_id: int, data: TrainingUpdate, organization):
     now = timezone.now()
     old_status = session.status
 
+    # Stopped by someone: nothing more is recorded, and the 409 tells an
+    # external trainer to stop.
+    if old_status == "cancelled":
+        raise HTTPException(status_code=409, detail="This run was stopped; stop training.")
+
     if data.status:
         if data.status not in VALID_STATUSES:
             raise HTTPException(

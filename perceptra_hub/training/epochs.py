@@ -43,10 +43,10 @@ def lower_is_better(key: str) -> bool:
 
 
 def clean_metrics(metrics: Optional[Dict[str, Any]]) -> Dict[str, float]:
-    """Finite numbers only, with normalized names; the epoch number is not a metric."""
+    """Finite numbers only, with normalized names; epoch counters are not metrics."""
     out: Dict[str, float] = {}
     for key, value in (metrics or {}).items():
-        if key == "epoch" or isinstance(value, bool):
+        if key in ("epoch", "total_epochs") or isinstance(value, bool):
             continue
         try:
             number = float(value)

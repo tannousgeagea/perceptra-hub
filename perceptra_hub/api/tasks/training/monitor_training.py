@@ -38,6 +38,8 @@ class TrainingMonitor:
             
             # Update training session
             session = training_job.training_session
+            if session.status == 'cancelled':
+                return  # stopped by someone; the provider's late status changes nothing
             old_status = session.status
             new_status = status_info['status']
             

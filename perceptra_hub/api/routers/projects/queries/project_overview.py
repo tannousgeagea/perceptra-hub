@@ -124,10 +124,16 @@ def _training(project) -> Dict[str, Any]:
     sessions = TrainingSession.objects.filter(
         model_version__model__project=project, model_version__model__is_deleted=False
     ).select_related("model_version__model")
-    latest = sessions.order_by("-created_at").first()
+    # The newest active run if there is one: a newer run that was stopped or
+    # failed must not hide one that is still training.
+    latest = (sessions.filter(status__in=RUNNING_TRAINING).order_by("-created_at").first()
+              or sessions.order_by("-created_at").first())
     out = {"running": sessions.filter(status__in=RUNNING_TRAINING).count(), "latest": None}
     if latest is not None:
-        eta = latest.estimated_time_remaining
+        from training.epochs import stalled_for
+
+        stalled = stalled_for(latest)
+        eta = latest.estimated_time_remaining if not stalled else None
         out["latest"] = {
             **_version_ref(latest.model_version),
             # The session page and /training-sessions/{id} use this numeric id.
@@ -138,6 +144,8 @@ def _training(project) -> Dict[str, Any]:
             "current_epoch": latest.current_epoch,
             "total_epochs": latest.total_epochs,
             "eta_seconds": int(eta.total_seconds()) if eta else None,
+            # Running but no epoch for unusually long (training/epochs.py).
+            "stalled_seconds": int(stalled.total_seconds()) if stalled else None,
             "created_at": latest.created_at,
             "started_at": latest.started_at,
             "completed_at": latest.completed_at,

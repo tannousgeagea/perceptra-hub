@@ -395,12 +395,17 @@ class AgentManager:
     ):
         """
         Update training job progress from agent.
+
+        Returns True when the run was stopped by someone: the agent is told
+        to stop (and nothing it reports is recorded any more).
         """
         try:
             training_job = cls._agent_training_job(agent, job_id, 'training_session')
 
             session = training_job.training_session
-            
+            if session.status == 'cancelled':
+                return True
+
             # Update session
             update_fields = []
             
@@ -443,10 +448,12 @@ class AgentManager:
                     publish_status(session)
 
             logger.debug(f"Updated job {job_id}: {status} ({progress}%)")
-            
+            return False
+
         except TrainingJob.DoesNotExist:
             logger.error(f"Training job not found for agent {agent.agent_id}: {job_id}")
-    
+            return False
+
     @classmethod
     def complete_job(
         cls,
@@ -467,7 +474,11 @@ class AgentManager:
 
             session = training_job.training_session
             model_version = session.model_version
-            
+            if session.status == 'cancelled':
+                # Stopped by someone: keep it cancelled, keep nothing from the run.
+                logger.info(f"Job {job_id} finished after being stopped; result ignored")
+                return
+
             with transaction.atomic():
                 # Update session
                 session.status = 'completed' if success else 'failed'

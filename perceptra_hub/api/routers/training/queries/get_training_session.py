@@ -88,9 +88,13 @@ def _get_session(session_id: int, organization):
 
 
 @sync_to_async
-def _check_org_access(session, organization):
-    if session.model_version.model.project.organization_id != organization.id:
+def _check_access(session, ctx: RequestContext):
+    """Same organization, and allowed to view the run's project (not just any org member)."""
+    from projects.dependencies import require_project_permission
+
+    if session.model_version.model.project.organization_id != ctx.organization.id:
         raise HTTPException(status_code=403, detail="Access denied to this training session")
+    require_project_permission(ctx, session.model_version.model.project, "view", "Viewing this training run")
 
 
 @sync_to_async
@@ -117,7 +121,7 @@ async def get_training_session(
     ctx: RequestContext = Depends(get_request_context),
 ) -> TrainingSessionOut:
     session = await _get_session(session_id, ctx.organization)
-    await _check_org_access(session, ctx.organization)
+    await _check_access(session, ctx)
     checkpoints = await _get_checkpoints(session)
 
     mv = session.model_version
