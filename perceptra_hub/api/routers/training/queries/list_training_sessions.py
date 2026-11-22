@@ -55,9 +55,21 @@ def _format_duration(delta) -> Optional[str]:
     return f"{s}s"
 
 
+def _visible(qs, ctx: RequestContext):
+    """Only runs of projects the person may view: org admins and owners see all,
+    everyone else only projects they are a member of (every project role can view)."""
+    from memberships.roles import ORG_ROLES_WITH_PROJECT_BYPASS
+
+    if ctx.role and ctx.role.name in ORG_ROLES_WITH_PROJECT_BYPASS:
+        return qs
+    if ctx.user is None:
+        return qs.none()
+    return qs.filter(model_version__model__project__memberships__user=ctx.user)
+
+
 @sync_to_async
 def _query_sessions(
-    organization,
+    ctx: RequestContext,
     project_id: Optional[str],
     model_id: Optional[str],
     model_uuid: Optional[str],
@@ -70,8 +82,9 @@ def _query_sessions(
         "model_version__model__project",
         "triggered_by",
     ).filter(
-        model_version__model__project__organization=organization
+        model_version__model__project__organization=ctx.organization
     )
+    qs = _visible(qs, ctx)
 
     if project_id:
         qs = qs.filter(model_version__model__project__project_id=project_id)
@@ -104,7 +117,7 @@ async def list_training_sessions(
     ctx: RequestContext = Depends(get_request_context),
 ):
     total, sessions = await _query_sessions(
-        ctx.organization, project_id, model_id, model_uuid, search, status, limit, offset
+        ctx, project_id, model_id, model_uuid, search, status, limit, offset
     )
 
     results = []

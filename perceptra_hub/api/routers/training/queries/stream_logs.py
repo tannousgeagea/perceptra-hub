@@ -9,7 +9,10 @@ router = APIRouter()
 
 
 @sync_to_async
-def _get_session(session_id: int, organization):
+def _get_session(session_id: int, ctx: RequestContext):
+    from projects.dependencies import require_project_permission
+
+    organization = ctx.organization
     try:
         session = TrainingSession.objects.select_related(
             "model_version__model__project__organization"
@@ -19,6 +22,7 @@ def _get_session(session_id: int, organization):
 
     if session.model_version.model.project.organization_id != organization.id:
         raise HTTPException(status_code=403, detail="Access denied to this training session")
+    require_project_permission(ctx, session.model_version.model.project, "view", "Viewing this training run")
 
     return session
 
@@ -28,7 +32,7 @@ async def stream_logs(
     session_id: int,
     ctx: RequestContext = Depends(get_request_context),
 ):
-    session = await _get_session(session_id, ctx.organization)
+    session = await _get_session(session_id, ctx)
 
     # Prefer storage-backed log file key; fall back to local path convention
     if session.log_file_key:
