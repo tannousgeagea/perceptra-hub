@@ -339,11 +339,11 @@ async def report_job_progress(
     request: JobProgressRequest,
     agent: Agent = Depends(authenticate_agent_from_header)
 ):
-    """Agent reports training progress"""
-    
+    """Agent reports training progress; "cancel": true tells it to stop the job."""
+
     @sync_to_async
     def update():
-        AgentManager.update_job_progress(
+        return AgentManager.update_job_progress(
             agent=agent,
             job_id=request.job_id,
             status=request.status,
@@ -351,10 +351,12 @@ async def report_job_progress(
             metrics=request.metrics,
             error=request.error
         )
-    
-    await update()
-    
-    return {"status": "ok", "message": "Progress updated"}
+
+    cancelled = await update()
+
+    if cancelled:
+        return {"status": "ok", "message": "Run was stopped", "cancel": True}
+    return {"status": "ok", "message": "Progress updated", "cancel": False}
 
 
 @router.post("/jobs/complete")

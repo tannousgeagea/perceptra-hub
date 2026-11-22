@@ -10,6 +10,7 @@ import traceback
 from pathlib import Path
 from training.trainers.base import TrainingCallbacks
 from training.epochs import publish_status
+from training.cancel import TrainingStopped, is_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ def train_model_on_platform_gpu(
 
     dataset_path = None
     output_dir = None
+    training_session = None
 
     try:
         # 1. Get model version and training session
@@ -61,7 +63,10 @@ def train_model_on_platform_gpu(
         training_session = TrainingSession.objects.get(
             session_id=training_session_id
         )
-        
+        if training_session.status == 'cancelled':
+            logger.info(f"Job {job_id} was stopped while queued; not starting")
+            return {'status': 'cancelled', 'job_id': job_id}
+
         # 2. Update status
         training_session.status = 'initializing'
         training_session.started_at = timezone.now()
@@ -116,7 +121,10 @@ def train_model_on_platform_gpu(
             callbacks=callbacks
         )
         
-        # 8. Execute training
+        # 8. Execute training (unless it was stopped while the data downloaded)
+        if is_cancelled(training_session.pk):
+            logger.info(f"Job {job_id} was stopped before training began")
+            return {'status': 'cancelled', 'job_id': job_id}
         training_session.status = 'running'
         training_session.total_epochs = training_config.epochs
         training_session.save()
@@ -124,7 +132,12 @@ def train_model_on_platform_gpu(
 
         logger.info("Starting training execution")
         result = trainer.train()
-        
+
+        # Stopped right as training ended: keep nothing, leave it cancelled.
+        if is_cancelled(training_session.pk):
+            logger.info(f"Job {job_id} was stopped; discarding its result")
+            return {'status': 'cancelled', 'job_id': job_id}
+
         # 9. Upload artifacts to storage
         logger.info("Uploading training artifacts")
         
@@ -182,6 +195,8 @@ def train_model_on_platform_gpu(
         error_msg = "Training exceeded the 6-hour time limit and was terminated"
         error_trace = traceback.format_exc()
         logger.error(f"Soft time limit exceeded for job {job_id}")
+        if training_session is not None and is_cancelled(training_session.pk):
+            return {'status': 'cancelled', 'job_id': job_id}
         try:
             training_session.status = 'failed'
             training_session.error_message = error_msg
@@ -197,6 +212,12 @@ def train_model_on_platform_gpu(
         raise
 
     except Exception as e:
+        # "Stop run": the callback raised TrainingStopped, or the kill broke
+        # something on the way out. Not a failure, and never retried.
+        if isinstance(e, TrainingStopped) or (training_session is not None and is_cancelled(training_session.pk)):
+            logger.info(f"Job {job_id} stopped by a user")
+            return {'status': 'cancelled', 'job_id': job_id}
+
         error_msg = str(e)
         error_trace = traceback.format_exc()
 
@@ -243,6 +264,8 @@ class PlatformTrainingCallbacks(TrainingCallbacks):
 
     def on_train_error(self, epoch: int, error: Exception):
         """Persist error details immediately so the UI shows them even before the task re-raises."""
+        if isinstance(error, TrainingStopped) or is_cancelled(self.training_session.pk):
+            return  # stopped by someone: keep "Stopped by …", not an error
         try:
             import traceback as _tb
             self.training_session.error_message = str(error)
@@ -255,6 +278,9 @@ class PlatformTrainingCallbacks(TrainingCallbacks):
         """Called after each epoch: history, best metrics, ETA and the live event."""
         from training.epochs import record_epoch
 
+        # Someone pressed "Stop run" (and the task wasn't killed yet): end here.
+        if is_cancelled(self.training_session.pk):
+            raise TrainingStopped()
         record_epoch(self.training_session, epoch, metrics.to_dict())
 
         # Update Celery task state for frontend polling

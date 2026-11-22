@@ -50,6 +50,15 @@ shutdown_requested = False
 from agent.inference_executor import InferenceJobExecutor
 
 
+class JobCancelled(BaseException):
+    """Someone stopped the job on the platform.
+
+    A BaseException on purpose: the trainers wrap progress callbacks in
+    `except Exception` (a failing report must not kill training), and this
+    one has to get through them to end the run.
+    """
+
+
 class AgentClient:
     """Client for communicating with platform API"""
     
@@ -126,8 +135,8 @@ class AgentClient:
         progress: float,
         metrics: dict,
         error: Optional[str] = None
-    ) -> bool:
-        """Report job progress"""
+    ) -> Optional[Dict[str, Any]]:
+        """Report job progress. Returns the platform's reply ("cancel": true means stop), or None."""
         try:
             response = requests.post(
                 f'{self.api_url}/api/v1/agents/jobs/progress',
@@ -143,10 +152,13 @@ class AgentClient:
             )
             response.raise_for_status()
             logger.debug(f'Progress reported: {status} ({progress}%)')
-            return True
+            try:
+                return response.json()
+            except ValueError:
+                return {}
         except Exception as e:
             logger.error(f'Failed to report progress: {e}')
-            return False
+            return None
     
     def complete_job(
         self,
@@ -334,12 +346,16 @@ class JobExecutor:
             # Setup progress callback
             def progress_callback(epoch: int, total_epochs: int, metrics: dict):
                 progress = (epoch / total_epochs) * 100
-                self.client.report_progress(
+                # The epoch number lets the platform keep the run's epoch history.
+                reply = self.client.report_progress(
                     job_id=job_id,
                     status='running',
                     progress=progress,
-                    metrics=metrics
+                    metrics={**metrics, 'epoch': epoch, 'total_epochs': total_epochs}
                 )
+                if reply and reply.get('cancel'):
+                    logger.info(f'Job {job_id} was stopped on the platform after epoch {epoch}')
+                    raise JobCancelled()
             
             trainer.set_progress_callback(progress_callback)
             
@@ -472,7 +488,11 @@ class Agent:
                 final_metrics=metrics,
                 error=error
             )
-            
+
+        except JobCancelled:
+            # Already marked cancelled on the platform: nothing to upload or report.
+            logger.info(f'Job {job_id} stopped; artifacts discarded')
+
         except Exception as e:
             logger.error(f'Failed to execute job: {e}', exc_info=True)
             self.client.complete_job(
