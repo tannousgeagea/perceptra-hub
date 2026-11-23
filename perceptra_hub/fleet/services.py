@@ -32,6 +32,9 @@ PROTOCOL = 1
 
 ACTIVE = (Rollout.Status.PREPARING, Rollout.Status.CANARY, Rollout.Status.ROLLING, Rollout.Status.PAUSED)
 OPEN_TARGET = (RolloutTarget.State.WAITING, RolloutTarget.State.ASSIGNED)
+# The device runs the version it reports. rolled_back too: it runs that one
+# after refusing a newer version.
+ON_VERSION = (DeviceModel.Reported.RUNNING, DeviceModel.Reported.ROLLED_BACK)
 
 
 class FleetError(Exception):
@@ -42,6 +45,12 @@ class FleetError(Exception):
 
 def poll_seconds(device: Device) -> int:
     return device.poll_seconds or DEFAULT_POLL_SECONDS
+
+
+def in_sync(dm: DeviceModel) -> bool:
+    """The device runs what it should (or nothing is asked of it)."""
+    return dm.desired_version_id is None or (
+        dm.desired_version_id == dm.reported_version_id and dm.reported_status in ON_VERSION)
 
 
 def device_status(device: Device, now=None) -> str:
@@ -59,11 +68,11 @@ def device_status(device: Device, now=None) -> str:
 
 
 def issue_enrollment_code(device: Device) -> str:
-    """A new one-time code for the device; any earlier unused code stops working."""
+    """A new one-time code for the device; any earlier unused code stops working.
+    A revoked device stays revoked (it has no key) until the code is used."""
     code, code_hash, expires = keys.new_enrollment_code()
     device.enrollment_code_hash, device.enrollment_expires_at = code_hash, expires
-    device.revoked_at = None
-    device.save(update_fields=["enrollment_code_hash", "enrollment_expires_at", "revoked_at"])
+    device.save(update_fields=["enrollment_code_hash", "enrollment_expires_at"])
     return code
 
 
@@ -156,9 +165,7 @@ def _apply_report(device: Device, report: dict, now) -> Optional[Rollout]:
     if failed is not None and failed.id == rv and target.state != RolloutTarget.State.FAILED:
         target.state, target.error, target.finished_at = RolloutTarget.State.FAILED, dm.reported_error or "Failed on the device", now
         target.save(update_fields=["state", "error", "finished_at"])
-    elif (version is not None and version.id == rv and target.state == RolloutTarget.State.ASSIGNED
-          and status in (DeviceModel.Reported.RUNNING, DeviceModel.Reported.ROLLED_BACK)):
-        # rolled_back still means "running this version" (after refusing another one).
+    elif version is not None and version.id == rv and target.state == RolloutTarget.State.ASSIGNED and status in ON_VERSION:
         target.state, target.error, target.finished_at = RolloutTarget.State.UPDATED, "", now
         target.save(update_fields=["state", "error", "finished_at"])
     return target.rollout
@@ -323,8 +330,7 @@ def _assign(rollout: Rollout, targets) -> None:
         dm, _ = DeviceModel.objects.get_or_create(device=t.device, model=rollout.model)
         dm.desired_version, dm.rollout = rollout.version, rollout
         dm.save(update_fields=["desired_version", "rollout", "updated_at"])
-        already = (dm.reported_version_id == rollout.version_id
-                   and dm.reported_status in (DeviceModel.Reported.RUNNING, DeviceModel.Reported.ROLLED_BACK))
+        already = dm.reported_version_id == rollout.version_id and dm.reported_status in ON_VERSION
         t.state = RolloutTarget.State.UPDATED if already else RolloutTarget.State.ASSIGNED
         t.assigned_at = now
         t.finished_at = now if already else None

@@ -24,9 +24,7 @@ def site(s, counts=None):
 
 
 def device_model(dm: DeviceModel):
-    in_sync = dm.desired_version_id is None or (
-        dm.desired_version_id == dm.reported_version_id
-        and dm.reported_status in (DeviceModel.Reported.RUNNING, DeviceModel.Reported.ROLLED_BACK))
+    in_sync = services.in_sync(dm)
     return {
         "model_id": dm.model.model_id, "model_name": dm.model.name, "project_id": str(dm.model.project.project_id),
         "desired": version_ref(dm.desired_version), "reported": version_ref(dm.reported_version),
@@ -43,7 +41,7 @@ def device(d, now=None, *, detail=False):
         "site": {"site_id": str(d.site.site_id), "name": d.site.name} if d.site_id else None,
         "status": services.device_status(d, now), "last_seen_at": iso(d.last_seen_at),
         "enrolled_at": iso(d.enrolled_at), "agent_version": d.agent_version or None,
-        "enrollment_pending": bool(d.enrollment_code_hash) and not d.revoked_at,
+        "enrollment_pending": bool(d.enrollment_code_hash),
         "enrollment_expires_at": iso(d.enrollment_expires_at),
         "health": {k: d.health.get(k) for k in HEALTH_SUMMARY_KEYS if k in (d.health or {})},
         "models": [device_model(dm) for dm in d.models.all()],

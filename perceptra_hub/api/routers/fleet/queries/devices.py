@@ -207,10 +207,11 @@ def get_device(device_id: UUID, ctx=READ):
     out = serializers.device(d, detail=True)
     out["rollouts"] = [{
         "rollout_id": str(t.rollout.rollout_id), "model_name": t.rollout.model.name,
+        "project_id": str(t.rollout.model.project.project_id),
         "version": serializers.version_ref(t.rollout.version), "is_rollback": t.rollout.is_rollback,
         "rollout_status": t.rollout.status, "state": t.state, "error": t.error or None,
         "created_at": serializers.iso(t.rollout.created_at), "finished_at": serializers.iso(t.finished_at),
-    } for t in RolloutTarget.objects.filter(device=d).select_related("rollout__model", "rollout__version")
+    } for t in RolloutTarget.objects.filter(device=d).select_related("rollout__model__project", "rollout__version")
         .order_by("-rollout__created_at")[:20]]
     return out
 
