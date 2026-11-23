@@ -161,6 +161,11 @@ class RolloutTarget(models.Model):
     error = models.CharField(max_length=500, blank=True, default='')
     assigned_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    # What the device ran when this rollout asked it to update (set at assignment).
+    # Rollback sends each device back to its own from_version.
+    from_version = models.ForeignKey('ml_models.ModelVersion', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    # Only for rollbacks, where devices go back to different versions. Empty: the rollout's version.
+    to_version = models.ForeignKey('ml_models.ModelVersion', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
 
     class Meta:
         db_table = 'fleet_rollout_target'

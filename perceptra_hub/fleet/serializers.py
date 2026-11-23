@@ -77,6 +77,8 @@ def rollout(r: Rollout, now=None, *, targets=False):
             "device_status": services.device_status(t.device, now),
             "phase": t.phase, "state": t.state, "error": t.error or None,
             "assigned_at": iso(t.assigned_at), "finished_at": iso(t.finished_at),
-        } for t in r.targets.select_related("device__site").order_by("phase", "device__name")
+            # This device's own change: what it ran when asked, and what it was asked to run.
+            "from_version": version_ref(t.from_version), "version": version_ref(t.to_version or r.version),
+        } for t in r.targets.select_related("device__site", "from_version", "to_version").order_by("phase", "device__name")
             if t.state != RolloutTarget.State.SKIPPED or targets == "all"]
     return out

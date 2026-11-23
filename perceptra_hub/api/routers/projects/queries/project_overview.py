@@ -200,6 +200,10 @@ def _models_and_deployment(project) -> Dict[str, Any]:
     }
 
 
+def _version_name(v) -> str:
+    return v.version_name or f"v{v.version_number}"
+
+
 def _fleet(project) -> Dict[str, Any]:
     """Edge devices that run this project's models, and the rollout to watch (a paused one first)."""
     from fleet import services
@@ -231,7 +235,8 @@ def _fleet(project) -> Dict[str, Any]:
             "is_rollback": watch.is_rollback,
             "model_id": watch.model.model_id,
             "model_name": watch.model.name,
-            "version_name": watch.version.version_name or f"v{watch.version.version_number}",
+            # A rollback sends devices to different versions: name the one it undoes.
+            "version_name": _version_name(watch.previous_version if watch.is_rollback and watch.previous_version else watch.version),
             "progress": services.rollout_counts(watch, now),
         },
     }

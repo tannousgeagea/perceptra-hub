@@ -47,6 +47,18 @@ def poll_seconds(device: Device) -> int:
     return device.poll_seconds or DEFAULT_POLL_SECONDS
 
 
+def target_version_id(t: RolloutTarget) -> int:
+    """The version this target is asked to run: its own (rollbacks) or the rollout's."""
+    return t.to_version_id or t.rollout.version_id
+
+
+def rollout_versions(rollout: Rollout) -> list:
+    """Every version a rollout sends: one, or several for a rollback."""
+    from ml_models.models import ModelVersion
+    ids = {rollout.version_id, *rollout.targets.exclude(to_version=None).values_list("to_version", flat=True)}
+    return list(ModelVersion.objects.filter(pk__in=ids).select_related("storage_profile", "model"))
+
+
 def in_sync(dm: DeviceModel) -> bool:
     """The device runs what it should (or nothing is asked of it)."""
     return dm.desired_version_id is None or (
@@ -161,7 +173,7 @@ def _apply_report(device: Device, report: dict, now) -> Optional[Rollout]:
               .exclude(state=RolloutTarget.State.SKIPPED).order_by("-rollout__created_at").first())
     if target is None:
         return None
-    rv = target.rollout.version_id
+    rv = target_version_id(target)
     if failed is not None and failed.id == rv and target.state != RolloutTarget.State.FAILED:
         target.state, target.error, target.finished_at = RolloutTarget.State.FAILED, dm.reported_error or "Failed on the device", now
         target.save(update_fields=["state", "error", "finished_at"])
@@ -264,11 +276,15 @@ def _supersede(model, except_pk=None):
 
 def create_rollout(organization, model, version, devices: List[Device], *, user=None, strategy: str = "all",
                    canary_count: int = 1, canary_minutes: int = 15, max_failures: int = 0,
-                   selector: Optional[dict] = None, is_rollback: bool = False, previous_version=None) -> Rollout:
-    if version.model_id != model.id:
-        raise FleetError("That version belongs to another model.")
-    if not artifacts.available_formats(version):
-        raise FleetError(f"{version.version_name} has no model file to deploy (no ONNX or checkpoint).")
+                   selector: Optional[dict] = None, is_rollback: bool = False, previous_version=None,
+                   versions: Optional[dict] = None) -> Rollout:
+    """`versions` (device pk → version) sends some devices another version than `version` (rollbacks)."""
+    versions = {pk: v for pk, v in (versions or {}).items() if v.pk != version.pk}
+    for v in {version, *versions.values()}:
+        if v.model_id != model.id:
+            raise FleetError("That version belongs to another model.")
+        if not artifacts.available_formats(v):
+            raise FleetError(f"{v.version_name} has no model file to deploy (no ONNX or checkpoint).")
     if not devices:
         raise FleetError("No devices match. Pick at least one enrolled device, site or label.")
     if strategy not in Rollout.Strategy.values:
@@ -294,9 +310,10 @@ def create_rollout(organization, model, version, devices: List[Device], *, user=
         ordered = sorted(devices, key=lambda d: (device_status(d, now) != "online", d.name))
         n_canary = canary_count if strategy == Rollout.Strategy.CANARY else 0
         RolloutTarget.objects.bulk_create([
-            RolloutTarget(rollout=rollout, device=d, phase=RolloutTarget.Phase.CANARY if i < n_canary else RolloutTarget.Phase.MAIN)
+            RolloutTarget(rollout=rollout, device=d, phase=RolloutTarget.Phase.CANARY if i < n_canary else RolloutTarget.Phase.MAIN,
+                          to_version=versions.get(d.pk))
             for i, d in enumerate(ordered)])
-    if artifacts.is_prepared(version):
+    if all(artifacts.is_prepared(v) for v in {version, *versions.values()}):
         start(rollout)
     else:
         from api.tasks.fleet import prepare_rollout
@@ -309,10 +326,12 @@ def start(rollout: Rollout) -> Rollout:
     rollout.refresh_from_db()
     if rollout.status != Rollout.Status.PREPARING:
         return rollout
-    if artifacts.ready_artifact(rollout.version, None) is None:
-        errors = [a.error for a in rollout.version.fleet_artifacts.all() if a.error]
+    missing = [v for v in rollout_versions(rollout) if artifacts.ready_artifact(v, None) is None]
+    if missing:
+        errors = [a.error for a in missing[0].fleet_artifacts.all() if a.error]
         rollout.status = Rollout.Status.FAILED
-        rollout.status_reason = f"Couldn't prepare the model file: {errors[0] if errors else 'no file found'}"
+        rollout.status_reason = (f"Couldn't prepare the model file of {missing[0].version_name}: "
+                                 f"{errors[0] if errors else 'no file found'}")[:500]
         rollout.completed_at = timezone.now()
         rollout.save(update_fields=["status", "status_reason", "completed_at"])
         return rollout
@@ -326,15 +345,18 @@ def start(rollout: Rollout) -> Rollout:
 
 def _assign(rollout: Rollout, targets) -> None:
     now = timezone.now()
-    for t in targets.select_related("device"):
+    for t in targets.select_related("device", "rollout"):
         dm, _ = DeviceModel.objects.get_or_create(device=t.device, model=rollout.model)
-        dm.desired_version, dm.rollout = rollout.version, rollout
+        # What the device runs now: where a rollback of this rollout sends it.
+        t.from_version_id = dm.reported_version_id
+        to = target_version_id(t)
+        dm.desired_version_id, dm.rollout = to, rollout
         dm.save(update_fields=["desired_version", "rollout", "updated_at"])
-        already = dm.reported_version_id == rollout.version_id and dm.reported_status in ON_VERSION
+        already = dm.reported_version_id == to and dm.reported_status in ON_VERSION
         t.state = RolloutTarget.State.UPDATED if already else RolloutTarget.State.ASSIGNED
         t.assigned_at = now
         t.finished_at = now if already else None
-        t.save(update_fields=["state", "assigned_at", "finished_at"])
+        t.save(update_fields=["state", "assigned_at", "finished_at", "from_version"])
 
 
 def advance(rollout: Rollout, now=None) -> Rollout:
@@ -348,8 +370,9 @@ def advance(rollout: Rollout, now=None) -> Rollout:
         failed = [t for t in targets if t.state == RolloutTarget.State.FAILED]
         if len(failed) > rollout.max_failures:
             rollout.status = Rollout.Status.PAUSED
-            rollout.status_reason = (f"Paused: {len(failed)} device{'s' if len(failed) != 1 else ''} failed to run "
-                                     f"{rollout.version.version_name}. First error: {failed[0].error}")[:500]
+            what = "go back" if rollout.is_rollback else f"run {rollout.version.version_name}"
+            rollout.status_reason = (f"Paused: {len(failed)} device{'s' if len(failed) != 1 else ''} failed to "
+                                     f"{what}. First error: {failed[0].error}")[:500]
             rollout.save(update_fields=["status", "status_reason"])
             return rollout
 
@@ -401,18 +424,29 @@ def resume(rollout: Rollout) -> Rollout:
     return advance(rollout)
 
 
-def rollback(rollout: Rollout, user=None) -> Rollout:
-    """Put every device this rollout reached back on the version it replaced."""
-    if rollout.previous_version is None:
-        raise FleetError("There is no earlier version to go back to for these devices.")
-    devices = [t.device for t in rollout.targets.select_related("device")
+def rollback_plan(rollout: Rollout) -> list:
+    """(device, version to go back to) for every device this rollout reached: the version that device
+    ran when the rollout asked it to update. Devices that ran nothing before are left out (there is
+    no "uninstall"). A device that failed and already went back is included; it counts as updated at once."""
+    reached = (rollout.targets.select_related("device", "from_version")
                .filter(state__in=(RolloutTarget.State.ASSIGNED, RolloutTarget.State.UPDATED, RolloutTarget.State.FAILED))
-               .filter(device__revoked_at__isnull=True)]
-    if not devices:
-        raise FleetError("No device got this version yet, so there is nothing to roll back.")
-    return create_rollout(rollout.organization, rollout.model, rollout.previous_version, devices, user=user,
+               .filter(device__revoked_at__isnull=True, from_version__isnull=False)
+               .order_by("device__name"))
+    # A device that already ran this rollout's version when reached has nothing to undo.
+    return [(t.device, t.from_version) for t in reached if t.from_version_id != (t.to_version_id or rollout.version_id)]
+
+
+def rollback(rollout: Rollout, user=None) -> Rollout:
+    """Put every device this rollout reached back on the version it ran before, each its own."""
+    plan = rollback_plan(rollout)
+    if not plan:
+        raise FleetError("No device this rollout reached ran another version before it, so there is nothing to go back to.")
+    main = Counter(v.pk for _, v in plan).most_common(1)[0][0]
+    version = next(v for _, v in plan if v.pk == main)
+    return create_rollout(rollout.organization, rollout.model, version, [d for d, _ in plan], user=user,
                           strategy=Rollout.Strategy.ALL, selector={"rollback_of": str(rollout.rollout_id)},
-                          is_rollback=True, previous_version=rollout.version)
+                          is_rollback=True, previous_version=rollout.version,
+                          versions={d.pk: v for d, v in plan})
 
 
 def advance_all() -> int:
