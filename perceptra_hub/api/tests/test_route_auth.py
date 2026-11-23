@@ -27,6 +27,7 @@ AUTH_ROOTS = {
     "get_current_user",                 # users.auth (JWT)
     "get_request_context",              # organizations.dependencies (JWT or X-API-Key + org)
     "authenticate_agent_from_header",   # compute agents (X-Agent-Key + X-Agent-Secret)
+    "authenticate_device",              # fleet devices (X-Device-Key)
 }
 
 # (method, path relative to /api/v1): why it is public.
@@ -47,6 +48,7 @@ PUBLIC_ROUTES = {
     ("GET", "/health"): "health check",
     ("GET", "/evaluation/health"): "health check",
     ("GET", "/invitations/{token}"): "invitation page; the unguessable token in the link is the credential",
+    ("POST", "/edge/enroll"): "a device trades its one-time enrollment code (the credential) for a device key",
 }
 
 

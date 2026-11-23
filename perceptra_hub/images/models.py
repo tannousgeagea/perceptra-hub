@@ -1,5 +1,4 @@
 from django.db import models
-from tenants.models import EdgeBox, SensorBox
 from django.core.validators import MinValueValidator
 from django.utils.translation import gettext_lazy as _
 from django.contrib.auth import get_user_model

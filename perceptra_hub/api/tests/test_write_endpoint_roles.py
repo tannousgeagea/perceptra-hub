@@ -71,6 +71,8 @@ NO_ROLE_NEEDED = {
     ("POST", "/agents/jobs/progress"): "agent credentials; the agent's own jobs only",
     ("POST", "/agents/jobs/complete"): "agent credentials; the agent's own jobs only",
     ("POST", "/agents/artifacts/upload"): "agent credentials; only its own running job's artifact files",
+    ("POST", "/edge/heartbeat"): "device key; reports and reads the calling device's own state only",
+    ("POST", "/edge/rotate-key"): "device key; replaces the calling device's own key only",
     ("POST", "/agents/inference-jobs/{job_id}/results"): "agent credentials; the agent's own jobs only",
 }
 

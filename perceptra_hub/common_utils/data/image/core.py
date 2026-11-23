@@ -8,9 +8,6 @@ django.setup()
 from pathlib import Path
 from fastapi import UploadFile
 from images.models import Image
-from tenants.models import (
-    SensorBox,
-)
 
 from PIL import Image as PILImage
 from projects.models import Project, ProjectImage
@@ -54,7 +51,6 @@ def register_image_into_db(file, image_id:str=None, source=None, meta_info:dict=
             image_id=image_id if image_id else str(uuid.uuid4()),
             source_of_origin=source,
             meta_info=meta_info,
-            sensorbox=SensorBox.objects.filter(sensor_box_name=source).first()
         )
         
         image.width, image.height = img_size

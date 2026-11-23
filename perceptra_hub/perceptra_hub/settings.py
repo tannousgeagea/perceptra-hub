@@ -72,6 +72,7 @@ INSTALLED_APPS = [
     'ingest',
     'realtime',
     'notifications',
+    'fleet',
 ]
 
 MIDDLEWARE = [

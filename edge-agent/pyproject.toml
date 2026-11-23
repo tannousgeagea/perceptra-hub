@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "malumetrix-edge"
+version = "0.1.0"
+description = "Keeps an edge device's models in step with Malumetrix: pull updates, verify, switch, roll back, report health."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []   # standard library only: installs on minimal edge images
+
+[project.scripts]
+malumetrix-edge = "malumetrix_edge.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["malumetrix_edge*"]
