@@ -115,7 +115,21 @@ def _home(ctx: RequestContext) -> Dict[str, Any]:
         "projects": entries,
         "running": running,
         "production": production,
+        "fleet": _fleet_counts(ctx),
     }
+
+
+def _fleet_counts(ctx: RequestContext) -> Dict[str, int]:
+    """Edge devices by status (every member can see the fleet); revoked ones left out."""
+    from fleet import services
+    from fleet.models import Device
+
+    now = timezone.now()
+    counts = {"total": 0, "online": 0, "stale": 0, "offline": 0, "pending": 0}
+    for d in Device.objects.filter(organization=ctx.organization, revoked_at__isnull=True):
+        counts["total"] += 1
+        counts[services.device_status(d, now)] += 1
+    return counts
 
 
 @router.get("/organizations/home", summary="Organization home")

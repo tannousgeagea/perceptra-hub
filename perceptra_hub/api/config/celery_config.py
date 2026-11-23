@@ -180,6 +180,18 @@ class BaseConfig:
         'options': {'queue': 'evaluation', 'expires': 3600}  # Task expires after 1 hour
     },
 
+    # Fleet: canary timers run out even when no device calls; health data is kept 7 days.
+    'fleet-advance-rollouts': {
+        'task': 'activity:fleet_advance_rollouts',
+        'schedule': 60.0,
+        'options': {'queue': 'activity', 'expires': 55},
+    },
+    'fleet-prune-health': {
+        'task': 'activity:fleet_prune_health',
+        'schedule': crontab(hour=3, minute=30),
+        'options': {'queue': 'activity'},
+    },
+
     # Continuous training loop: evaluate retraining policies every hour
     'evaluate-retraining-policies': {
         'task': 'api.tasks.retraining.evaluate_retraining_policies',

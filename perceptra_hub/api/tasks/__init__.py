@@ -3,4 +3,5 @@ from . import (
     dataset_export,
     activity,
     notifications,
+    fleet,
 )

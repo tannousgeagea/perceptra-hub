@@ -200,6 +200,48 @@ def _models_and_deployment(project) -> Dict[str, Any]:
     }
 
 
+def _version_name(v) -> str:
+    return v.version_name or f"v{v.version_number}"
+
+
+def _fleet(project) -> Dict[str, Any]:
+    """Edge devices that run this project's models, and the rollout to watch (a paused one first)."""
+    from fleet import services
+    from fleet.models import DeviceModel, Rollout
+
+    now = timezone.now()
+    devices, behind, unreachable = set(), set(), set()
+    for dm in (DeviceModel.objects.filter(model__project=project, model__is_deleted=False, device__revoked_at__isnull=True)
+               .select_related("device")):
+        devices.add(dm.device_id)
+        if not services.in_sync(dm):
+            behind.add(dm.device_id)
+        if services.device_status(dm.device, now) in ("offline", "stale"):
+            unreachable.add(dm.device_id)
+
+    active = Rollout.objects.filter(model__project=project, model__is_deleted=False, status__in=services.ACTIVE)
+    paused = active.filter(status=Rollout.Status.PAUSED)
+    watch = (paused.order_by("-created_at").first() or active.order_by("-created_at").first())
+    return {
+        "devices": len(devices),
+        "in_sync": len(devices - behind),
+        "unreachable": len(unreachable),
+        "active_rollouts": active.count(),
+        "paused_rollouts": paused.count(),
+        "rollout": None if watch is None else {
+            "rollout_id": str(watch.rollout_id),
+            "status": watch.status,
+            "status_reason": watch.status_reason or None,
+            "is_rollback": watch.is_rollback,
+            "model_id": watch.model.model_id,
+            "model_name": watch.model.name,
+            # A rollback sends devices to different versions: name the one it undoes.
+            "version_name": _version_name(watch.previous_version if watch.is_rollback and watch.previous_version else watch.version),
+            "progress": services.rollout_counts(watch, now),
+        },
+    }
+
+
 def _monitoring(project) -> Dict[str, Any]:
     from temporal_analysis.models import MetricAlert, MetricSnapshot
     from training.models import RetrainingPolicy
@@ -238,6 +280,7 @@ def build_overview(project) -> Dict[str, Any]:
         "dataset": _dataset(project, reviewed_not_in_version),
         "training": _training(project),
         **_models_and_deployment(project),
+        "fleet": _fleet(project),
         "monitoring": _monitoring(project),
     }
 
