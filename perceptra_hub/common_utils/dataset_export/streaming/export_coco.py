@@ -106,7 +106,8 @@ class COCOStreamingExporter(BaseStreamingExporter):
                         split,
                         image_id_counter,
                         annotation_id_counter,
-                        annotations  # Original annotations for class info
+                        annotations,  # Original annotations for class info
+                        class_map,
                     )
                     
                     self.stats.augmented_images += 1
@@ -232,7 +233,8 @@ class COCOStreamingExporter(BaseStreamingExporter):
         split: str,
         image_id_counter: Dict,
         annotation_id_counter: Dict,
-        original_annotations: List[Annotation]
+        original_annotations: List[Annotation],
+        class_map: Dict,
     ):
         """Add augmented image to COCO structure."""
         img_id = image_id_counter[split]
@@ -253,13 +255,14 @@ class COCOStreamingExporter(BaseStreamingExporter):
         
         for ann in annotations:
             orig_ann = class_id_to_ann.get(ann['class_id'])
-            if not orig_ann:
+            if not orig_ann or orig_ann.annotation_class.name not in class_map:
                 continue
-            
+
             coco_data['annotations'].append({
                 'id': annotation_id_counter[split],
                 'image_id': img_id,
-                'category_id': ann['class_id'],
+                # the same category the original image uses (by name), not the raw class_id
+                'category_id': class_map[orig_ann.annotation_class.name],
                 'bbox': [
                     ann['xmin'],
                     ann['ymin'],
@@ -280,16 +283,16 @@ class COCOStreamingExporter(BaseStreamingExporter):
         img_width: int,
         img_height: int
     ) -> List[Dict]:
-        """Convert annotations to normalized format for augmentation."""
+        """Convert annotations to centre format for augmentation (ann.data is already normalized xyxy)."""
         normalized = []
         for ann in annotations:
             xmin, ymin, xmax, ymax = ann.data
             normalized.append({
                 'class_id': ann.annotation_class.class_id,
-                'x_center': (xmin + xmax) / 2 / img_width,
-                'y_center': (ymin + ymax) / 2 / img_height,
-                'width': (xmax - xmin) / img_width,
-                'height': (ymax - ymin) / img_height
+                'x_center': (xmin + xmax) / 2,
+                'y_center': (ymin + ymax) / 2,
+                'width': xmax - xmin,
+                'height': ymax - ymin
             })
         return normalized
     

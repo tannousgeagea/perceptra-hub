@@ -8,7 +8,7 @@ from datetime import datetime
 import numpy as np
 
 from projects.models import VersionImage
-from annotations.models import Annotation
+from annotations.models import Annotation, AnnotationClass
 from .base import BaseStreamingExporter
 
 logger = logging.getLogger(__name__)
@@ -22,8 +22,15 @@ class YOLOStreamingExporter(BaseStreamingExporter):
         """Export YOLO dataset directly to storage."""
         logger.info(f"Starting YOLO export: {self.version.version_name}")
         
-        class_names = set()
-        
+        # One class list for labels and data.yaml: every project class, by class_id.
+        # The YOLO index is the position in it (0..n-1 with no gaps), so it never
+        # depends on which classes happen to appear in this version.
+        classes = list(AnnotationClass.objects.filter(
+            annotation_group__project=self.version.project
+        ).order_by('class_id', 'id'))
+        self._yolo_index = {cls.id: i for i, cls in enumerate(classes)}
+        class_names = [cls.name for cls in classes]
+
         # Get all version images
         version_images = VersionImage.objects.filter(
             version=self.version
@@ -73,10 +80,6 @@ class YOLOStreamingExporter(BaseStreamingExporter):
                 self.stats.skipped_images += 1
                 continue
             
-            # Collect class names
-            for ann in annotations:
-                class_names.add(ann.annotation_class.name)
-            
             # Save original image and labels
             self._save_image_and_labels(
                 img_array,
@@ -110,7 +113,7 @@ class YOLOStreamingExporter(BaseStreamingExporter):
                     self.stats.train_annotations += len(aug_anns)
         
         # Add metadata files
-        self._add_metadata_files(sorted(class_names))
+        self._add_metadata_files(class_names)
         
         # Stream to storage
         storage_key = f"org-{self.version.project.organization.slug}/projects/{self.version.project.project_id}/datasets/{self.version.version_name}_yolo.zip"
@@ -146,9 +149,12 @@ class YOLOStreamingExporter(BaseStreamingExporter):
             # Filter small annotations
             if width * height < self.config.min_annotation_area:
                 continue
-            
+            index = self._yolo_index.get(ann.annotation_class_id)
+            if index is None:   # a class outside this project: never written with a wrong index
+                continue
+
             yolo_annotations.append({
-                'class_id': ann.annotation_class.class_id,
+                'class_id': index,
                 'x_center': x_center,
                 'y_center': y_center,
                 'width': width,
