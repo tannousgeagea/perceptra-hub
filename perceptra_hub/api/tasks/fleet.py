@@ -12,6 +12,7 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 HEALTH_RETENTION_DAYS = int(os.getenv("FLEET_HEALTH_RETENTION_DAYS", "7"))
+STATS_RETENTION_DAYS = int(os.getenv("FLEET_STATS_RETENTION_DAYS", "90"))
 
 
 @shared_task(name="activity:fleet_prepare_rollout", bind=True, max_retries=3, default_retry_delay=30)
@@ -39,10 +40,29 @@ def advance_rollouts():
     return services.advance_all()
 
 
+@shared_task(name="activity:fleet_check_field")
+def check_field():
+    """Every hour: compare each site with its own baseline; raise field alerts."""
+    from fleet import field
+    return field.check_all()
+
+
+@shared_task(name="activity:fleet_prune_samples")
+def prune_field_samples():
+    """Every night: unreviewed field samples past retention go (image and file too); unfinished uploads too."""
+    from fleet import samples
+    result = samples.prune()
+    logger.info("fleet: field samples pruned %s", result)
+    return result
+
+
 @shared_task(name="activity:fleet_prune_health")
 def prune_health_samples():
-    from fleet.models import HealthSample
+    from fleet.models import HealthSample, PredictionStat
     cutoff = timezone.now() - timedelta(days=HEALTH_RETENTION_DAYS)
     deleted, _ = HealthSample.objects.filter(at__lt=cutoff).delete()
     logger.info("fleet: pruned %s health samples older than %s days", deleted, HEALTH_RETENTION_DAYS)
-    return deleted
+    # Prediction summaries hold the baselines (the first days of a version), so they live longer.
+    stats, _ = PredictionStat.objects.filter(hour__lt=timezone.now() - timedelta(days=STATS_RETENTION_DAYS)).delete()
+    logger.info("fleet: pruned %s prediction summaries older than %s days", stats, STATS_RETENTION_DAYS)
+    return deleted + stats

@@ -53,10 +53,6 @@ STATUS_ERROR = "error"
 
 BOX_TYPE = "box"
 POLYGON_TYPE = "polygon"
-CLASS_COLORS = (
-    "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899",
-    "#14b8a6", "#84cc16", "#f43f5e", "#6366f1",
-)
 ROUND = 6
 
 
@@ -181,10 +177,8 @@ def _resolve_class(project, name: str, options: IngestOptions, cache: _BatchCach
     next_id = (AnnotationClass.objects.filter(annotation_group=group).order_by("-class_id")
                .values_list("class_id", flat=True).first())
     next_id = 0 if next_id is None else next_id + 1
-    cls = AnnotationClass.objects.create(
-        annotation_group=group, class_id=next_id, name=str(name).strip(),
-        color=CLASS_COLORS[next_id % len(CLASS_COLORS)],
-    )
+    # The model picks the colour (palette by class_id).
+    cls = AnnotationClass.objects.create(annotation_group=group, class_id=next_id, name=str(name).strip())
     classes[key] = cls
     return cls
 

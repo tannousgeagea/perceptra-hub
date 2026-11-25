@@ -42,6 +42,12 @@ class Engine:
             self._desired = {m["model_id"]: m for m in models}
         self._wake.set()
 
+    def sampling(self, model_id: str) -> Optional[dict]:
+        """The platform's image sampling policy for a model (None until the first full heartbeat answer)."""
+        with self._lock:
+            entry = self._desired.get(model_id)
+        return (entry or {}).get("sampling")
+
     # ── output for the heartbeat ──
     def reports(self) -> List[dict]:
         out = []

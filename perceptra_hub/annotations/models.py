@@ -32,6 +32,13 @@ class AnnotationGroup(models.Model):
         return f"{self.name} - {self.project.name}"
 
 
+# Colours given to classes created without one, by class_id.
+CLASS_COLORS = (
+    "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899",
+    "#14b8a6", "#84cc16", "#f43f5e", "#6366f1",
+)
+
+
 class AnnotationClass(models.Model):
     annotation_group = models.ForeignKey(
         AnnotationGroup, on_delete=models.CASCADE, related_name='classes'
@@ -49,6 +56,16 @@ class AnnotationClass(models.Model):
 
     def __str__(self):
         return f"{self.class_id} - {self.name} ({self.annotation_group.project})"
+
+    @property
+    def display_color(self) -> str:
+        """The saved colour, or the palette colour for this class_id (older rows may have none)."""
+        return self.color or CLASS_COLORS[self.class_id % len(CLASS_COLORS)]
+
+    def save(self, *args, **kwargs):
+        if not self.color:
+            self.color = CLASS_COLORS[self.class_id % len(CLASS_COLORS)]
+        super().save(*args, **kwargs)
 
 
 # Create your models here.

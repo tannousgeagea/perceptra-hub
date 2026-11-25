@@ -16,6 +16,9 @@ for the sidecar, a Python callback for the SDK.
     edge.start()
     ...
     edge.report_health(fps=24.8, latency_ms=31, errors=0)
+    edge.record(model_id, [{"class": "pallet", "confidence": 0.91}], camera="north-gate")  # every inference
+    if edge.should_sample(model_id, detections):                 # cheap: is this frame wanted?
+        edge.offer_sample(model_id, jpeg_bytes, detections, camera="north-gate")
 """
 import json
 import logging
@@ -31,6 +34,8 @@ from .health import Health
 from .local_api import serve
 from .protocol import Client
 from .runner import Runner
+from .sampler import Sampler
+from .stats import PredictionStats
 from .store import Store
 
 log = logging.getLogger("malumetrix_edge")
@@ -70,9 +75,17 @@ class Agent:
         self.health = Health(cfg.data_path)
         self.client = Client(cfg.url, creds["device_key"], timeout=cfg.request_timeout_s, ca_bundle=cfg.ca_bundle)
         self.engine = Engine(cfg, self.store, hand_over or hooks.hand_over, check_health or hooks.healthy)
-        self.runner = Runner(cfg, self.store, self.client, self.engine, self.health)
+        self.stats = PredictionStats(cfg.data_path)
+        self.sampler = Sampler(cfg.data_path, policy_of=self.engine.sampling,
+                               version_of=lambda mid: self.store.state["models"].get(mid, {}).get("current"))
+        self.runner = Runner(cfg, self.store, self.client, self.engine, self.health, self.stats, self.sampler)
         self._server = None
         self._thread: Optional[threading.Thread] = None
+
+    def record(self, model_id: str, predictions, camera: Optional[str] = None) -> None:
+        """One inference's detections, for the hourly summary (cheap; call it for every frame)."""
+        current = self.store.state["models"].get(model_id, {}).get("current")
+        self.stats.record(model_id, current, predictions, camera=camera)
 
     def status(self) -> dict:
         r = self.runner
@@ -135,6 +148,22 @@ class EdgeClient:
     def report_health(self, **metrics) -> None:
         """fps=, latency_ms=, errors=, frames=… sent with the next heartbeat."""
         self.agent.health.report(**metrics)
+
+    def record(self, model_id: str, predictions, camera: Optional[str] = None) -> None:
+        """Every inference's detections, e.g. [{"class": "pallet", "confidence": 0.91}, …] (empty list
+        for a frame with none). Folded into an hourly summary on the device; no image leaves it."""
+        self.agent.record(model_id, predictions, camera=camera)
+
+    def should_sample(self, model_id: str, predictions) -> Optional[str]:
+        """Is this frame worth sending (per the platform's policy)? The reason, or None. Cheap, per frame."""
+        return self.agent.sampler.should_sample(model_id, predictions)
+
+    def offer_sample(self, model_id: str, image: bytes, predictions, *, camera: Optional[str] = None, fmt: str = "jpg",
+                     width: Optional[int] = None, height: Optional[int] = None) -> Optional[str]:
+        """Hand over an encoded frame (JPEG/PNG/WebP bytes) with its detections; kept and uploaded in the
+        background if the policy wants it. Detections may carry "bbox_xyxyn": [x1, y1, x2, y2] normalised
+        0-1, so they arrive as boxes to review. Returns the reason it was kept, or None."""
+        return self.agent.sampler.offer_sample(model_id, image, predictions, camera=camera, fmt=fmt, width=width, height=height)
 
     def current(self, model_id: str) -> Optional[ModelUpdate]:
         info = self.agent.engine.current(model_id)

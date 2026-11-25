@@ -73,6 +73,9 @@ NO_ROLE_NEEDED = {
     ("POST", "/agents/artifacts/upload"): "agent credentials; only its own running job's artifact files",
     ("POST", "/edge/heartbeat"): "device key; reports and reads the calling device's own state only",
     ("POST", "/edge/rotate-key"): "device key; replaces the calling device's own key only",
+    ("POST", "/edge/samples"): "device key; the model's sampling policy (set by project admins) and the site switch decide",
+    ("PUT", "/edge/samples/{sample_id}/file"): "device key; only the calling device's own pending sample",
+    ("POST", "/edge/samples/{sample_id}/done"): "device key; only the calling device's own sample, into the model's project",
     ("POST", "/agents/inference-jobs/{job_id}/results"): "agent credentials; the agent's own jobs only",
 }
 

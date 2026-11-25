@@ -77,6 +77,7 @@ Your service asks the agent and reports to it on `127.0.0.1:7070`:
 | `GET /v1/models/<model_id>` | the current file, manifest and version |
 | `GET /v1/models` | every model on the device |
 | `POST /v1/health` | `{"fps": 24.8, "latency_ms": 31, "errors": 0}`, sent with the next heartbeat |
+| `POST /v1/predictions` | what the model found, for field monitoring (below) |
 | `GET /v1/status` | connection to the platform, last error, models |
 
 ### 3. SDK (inside your Python application)
@@ -116,6 +117,31 @@ Report `status: "rolled_back"` with `failed_version_id` when a version
 doesn't work; the platform stops offering it to the device and pauses the
 rollout.
 
+## Tell the platform what the model sees
+
+Record every inference's detections. The agent folds them into one small
+summary per hour, model version and camera (counts, a confidence histogram,
+objects per class) and sends it with the heartbeat; no image leaves the
+device. The platform compares each site with its own first days on the same
+version and raises an alert when confidence drops, low-confidence detections
+pile up, the mix of classes shifts, or an online device stops reporting.
+
+```python
+edge.record("<model_id>", [{"class": "pallet", "confidence": 0.91}], camera="north-gate")
+edge.record("<model_id>", [])          # a frame with nothing in it counts too
+```
+
+From any language, batch them to the local API (one list per inference):
+
+```
+POST http://127.0.0.1:7070/v1/predictions
+{"model_id": "<model_id>", "camera": "north-gate",
+ "batch": [[{"class": "pallet", "confidence": 0.91}], []]}
+```
+
+`label`/`class_name` and `score`/`conf` are accepted too. Summaries made while
+offline are kept (up to a week) and sent when the platform is back.
+
 ## The manifest
 
 Every version comes with `manifest.json`, so your code doesn't hard-code what
@@ -154,7 +180,31 @@ Anything that can reach the local API can read model paths and report
 health, so keep it on localhost unless your service runs in another
 container on a private network.
 
-## Not yet
+## Send frames worth labelling
 
-Image and prediction samples (for active learning from the field) come in a
-later version; `POST /v1/samples` answers 501 until then.
+When a project admin turns on field samples for a model (off by default;
+sites can refuse images altogether), the platform sends each device a policy:
+keep frames with a low-confidence detection, frames with a class you name,
+and a few random ones an hour, up to a cap. Ask per frame whether it's wanted,
+and only then encode and hand it over:
+
+```python
+if edge.should_sample("<model_id>", detections):
+    edge.offer_sample("<model_id>", jpeg_bytes, detections, camera="north-gate")
+```
+
+Give detections a box, `"bbox_xyxyn": [x1, y1, x2, y2]` normalised 0-1, and
+they arrive as boxes to review. From any language:
+
+```
+POST /v1/samples/check  {"model_id", "predictions"}              → {"keep": "low_confidence" | null}
+POST /v1/samples        {"model_id", "image_base64", "predictions",
+                         "camera"?, "format"?: "jpg"|"png"|"webp"} → {"kept": reason | null}
+```
+
+Kept frames wait on disk (at most 200 / 500 MB, oldest dropped first) and
+upload a few after each heartbeat: straight to your storage when it can issue
+upload links, else through the platform. Each one lands in the model's project
+with its detections as predictions to review, tagged with the site, device and
+reason; active learning ranks it at once. Unreviewed samples are deleted after
+30 days.

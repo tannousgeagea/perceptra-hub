@@ -76,7 +76,7 @@ async def list_annotations(
                     "type": ann.annotation_type.name if ann.annotation_type else None,
                     "class_id": ann.annotation_class.class_id,
                     "class_name": ann.annotation_class.name,
-                    "color": ann.annotation_class.color,
+                    "color": ann.annotation_class.display_color,
                     "data": {
                         "id": ann.annotation_uid,
                         "x": ann.data[0],
@@ -84,7 +84,7 @@ async def list_annotations(
                         "width": ann.data[2] - ann.data[0],
                         "height": ann.data[3] - ann.data[1],
                         "label": ann.annotation_class.name,
-                        "color": ann.annotation_class.color
+                        "color": ann.annotation_class.display_color
                     },
                     "source": ann.annotation_source,
                     "confidence": ann.confidence,
