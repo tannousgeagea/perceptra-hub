@@ -16,6 +16,7 @@ from .config import Config
 from .engine import Engine
 from .health import Health
 from .protocol import ApiError, Client, NetworkError, backoff_seconds
+from .stats import PredictionStats
 from .store import Store
 
 log = logging.getLogger("malumetrix_edge")
@@ -24,8 +25,13 @@ HARDWARE_EVERY_S = 3600
 
 
 class Runner:
-    def __init__(self, cfg: Config, store: Store, client: Client, engine: Engine, health: Health):
+    def __init__(self, cfg: Config, store: Store, client: Client, engine: Engine, health: Health,
+                 stats: Optional[PredictionStats] = None, sampler=None):
         self.cfg, self.store, self.client, self.engine, self.health = cfg, store, client, engine, health
+        self.stats, self.sampler = stats, sampler
+        # The desired state lives in memory: until this process got a full answer, don't
+        # send the saved token (an "unchanged" reply would leave it empty after a restart).
+        self._have_desired = False
         self.poll_seconds = 30
         self.failures = 0
         self.last_ok: Optional[float] = None
@@ -38,19 +44,27 @@ class Runner:
         snapshot = self.health.snapshot()
         backlog = self.health.batch()
         payload = {"accepts": self.cfg.accepts, "health": snapshot, "health_backlog": backlog,
-                   "models": self.engine.reports(), "state_token": self.store.state.get("state_token"),
+                   "models": self.engine.reports(),
+                   "state_token": self.store.state.get("state_token") if self._have_desired else None,
                    "refresh": self.engine.needs_refresh}
         if time.monotonic() - self._hardware_at > HARDWARE_EVERY_S:
             payload["hardware"] = self.health.hardware()
+        stats = self.stats.batch() if self.stats else []
+        if stats:
+            payload["prediction_stats"] = PredictionStats.wire(stats)
         try:
             answer = self.client.heartbeat(payload)
         except NetworkError as e:
+            if self.stats:
+                self.stats.save()   # kept on disk until the platform is back
             self.health.keep(snapshot)
             self.failures += 1
             self.last_error = f"platform unreachable: {e}"
             log.warning("%s (attempt %s)", self.last_error, self.failures)
             return None
         except ApiError as e:
+            if self.stats:
+                self.stats.save()
             self.health.keep(snapshot)
             self.failures += 1
             self.last_error = f"platform refused: {e.detail}"
@@ -61,6 +75,8 @@ class Runner:
             return {"_error": e.status}
         self.failures, self.last_ok, self.last_error = 0, time.time(), None
         self.health.sent(backlog)
+        if self.stats:
+            self.stats.sent(stats)
         if "hardware" in payload:
             self._hardware_at = time.monotonic()
         self.poll_seconds = int(answer.get("poll_seconds") or self.poll_seconds)
@@ -69,6 +85,12 @@ class Runner:
             self.store.state["state_token"] = answer.get("state_token")
             self.store.save()
             self.engine.set_desired(answer.get("models") or [])
+            self._have_desired = True
+        if self.sampler:
+            try:
+                self.sampler.upload_some(self.client)  # a few per beat: images never delay heartbeats much
+            except Exception:
+                log.exception("sample upload failed")
         return answer
 
     def next_wait(self, answer: Optional[dict]) -> float:

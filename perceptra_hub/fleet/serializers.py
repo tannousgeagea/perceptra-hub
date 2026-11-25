@@ -17,7 +17,8 @@ def version_ref(v):
 
 
 def site(s, counts=None):
-    out = {"site_id": str(s.site_id), "name": s.name, "location": s.location, "timezone": s.timezone, "created_at": iso(s.created_at)}
+    out = {"site_id": str(s.site_id), "name": s.name, "location": s.location, "timezone": s.timezone,
+           "allow_images": s.allow_images, "created_at": iso(s.created_at)}
     if counts is not None:
         out["devices"] = counts
     return out

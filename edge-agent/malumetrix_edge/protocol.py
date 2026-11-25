@@ -4,6 +4,9 @@ The three calls of the device protocol, over plain HTTPS (stdlib only).
     POST /api/v1/edge/enroll       {code}                → {device_id, device_key, …}
     POST /api/v1/edge/heartbeat    report (X-Device-Key) → desired state
     POST /api/v1/edge/rotate-key   (X-Device-Key)        → {device_key}
+    POST /api/v1/edge/samples      a kept image's description → where to upload it
+    PUT  <upload url>              the image (storage directly, or the platform)
+    POST /api/v1/edge/samples/{id}/done
 """
 import json
 import random
@@ -68,3 +71,28 @@ class Client:
 
     def rotate_key(self) -> str:
         return self._post("/edge/rotate-key", {})["device_key"]
+
+    # ── field samples ──
+    def create_sample(self, meta: dict) -> dict:
+        return self._post("/edge/samples", meta)
+
+    def finish_sample(self, sample_id: str) -> dict:
+        return self._post(f"/edge/samples/{sample_id}/done", {})
+
+    def upload(self, upload: dict, data: bytes) -> None:
+        """PUT the bytes where the platform said: storage directly, or the platform (with the device key)."""
+        headers = dict(upload.get("headers") or {})
+        if upload.get("device_key"):
+            headers["X-Device-Key"] = self.device_key or ""
+        self._put(upload["url"], data, headers, method=upload.get("method") or "PUT")
+
+    def _put(self, url: str, data: bytes, headers: dict, method: str = "PUT") -> None:
+        req = urllib.request.Request(url, data=data, headers={"User-Agent": f"malumetrix-edge/{__version__}", **headers},
+                                     method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=max(self.timeout, 120), context=self.ssl) as resp:
+                resp.read()
+        except urllib.error.HTTPError as e:
+            raise ApiError(e.code, e.reason) from None
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise NetworkError(str(e)) from None

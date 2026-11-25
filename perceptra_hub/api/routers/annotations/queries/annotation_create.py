@@ -155,7 +155,7 @@ async def create_annotation(
                 type=annotation.annotation_type.name,
                 class_id=annotation.annotation_class.class_id,
                 class_name=annotation.annotation_class.name,
-                color=annotation.annotation_class.color,
+                color=annotation.annotation_class.display_color,
                 data=annotation.data,
                 source=annotation.annotation_source,
                 confidence=annotation.confidence,

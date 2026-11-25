@@ -142,6 +142,75 @@ def rollback_rollout(rollout_id: UUID, ctx: RequestContext = Depends(get_request
     return _act(ctx, rollout_id, lambda s, r: s.rollback(r, user=ctx.user))
 
 
+@router.get("/fleet/models/{model_id}/field")
+def model_field(model_id: str, days: int = Query(14, ge=1, le=90), ctx: RequestContext = Depends(get_request_context)):
+    """How the model does at each site: daily numbers and the comparison with each site's own baseline."""
+    from fleet import field
+
+    model = _model(ctx, model_id)
+    _require(ctx, model.project, "view", "Viewing this model's field data")
+    return field.model_field(model, days)
+
+
+class SamplingIn(BaseModel):
+    enabled: bool
+    low_confidence_below: float = Field(0.4, ge=0, le=1)
+    classes: List[str] = Field(default_factory=list, max_length=50)
+    random_per_hour: int = Field(2, ge=0, le=60)
+    max_per_hour: int = Field(10, ge=1, le=600)
+
+
+@router.get("/fleet/models/{model_id}/sampling")
+def get_sampling(model_id: str, ctx: RequestContext = Depends(get_request_context)):
+    """Which field images devices keep for this model."""
+    from fleet import samples
+
+    model = _model(ctx, model_id)
+    _require(ctx, model.project, "view", "Viewing this model's sampling policy")
+    return samples.policy_of(model)
+
+
+@router.put("/fleet/models/{model_id}/sampling")
+def set_sampling(model_id: str, body: SamplingIn, ctx: RequestContext = Depends(get_request_context)):
+    """Turn field image sampling on or off, and tune it (project admins: images leave customer sites)."""
+    from fleet import samples
+    from fleet.models import SamplingPolicy
+
+    model = _model(ctx, model_id)
+    _require(ctx, model.project, "manage", "Changing what devices send from the field")
+    classes = sorted({c.strip()[:120] for c in body.classes if c and c.strip()})
+    SamplingPolicy.objects.update_or_create(model=model, defaults={
+        **body.model_dump(exclude={"classes"}), "classes": classes, "updated_by": ctx.user})
+    return samples.policy_of(model)
+
+
+@router.get("/fleet/models/{model_id}/samples")
+def list_samples(
+    model_id: str,
+    site_id: Optional[UUID] = Query(None),
+    device_id: Optional[UUID] = Query(None),
+    reason: Optional[str] = Query(None),
+    limit: int = Query(48, ge=1, le=200),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """The newest field samples of this model, with thumbnails and the device's detections."""
+    from fleet import samples
+    from fleet.models import FieldSample
+
+    model = _model(ctx, model_id)
+    _require(ctx, model.project, "view", "Viewing this model's field samples")
+    qs = (FieldSample.objects.filter(model=model, status=FieldSample.Status.REGISTERED)
+          .select_related("device", "site", "version", "image__storage_profile", "project_image"))
+    if site_id:
+        qs = qs.filter(site__site_id=site_id)
+    if device_id:
+        qs = qs.filter(device__device_id=device_id)
+    if reason:
+        qs = qs.filter(reason=reason)
+    return {"total": qs.count(), "retention_days": samples.RETENTION_DAYS,
+            "samples": [samples.serialize(s) for s in qs.order_by("-captured_at")[:limit]]}
+
+
 @router.get("/fleet/models/{model_id}/devices")
 def model_devices(model_id: str, ctx: RequestContext = Depends(get_request_context)):
     """Every device that runs or should run this model, for the project's Deploy view."""

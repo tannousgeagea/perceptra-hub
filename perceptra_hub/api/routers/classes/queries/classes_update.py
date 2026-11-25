@@ -80,7 +80,7 @@ async def update_class(
             id=annotation_class.id,
             classId=annotation_class.class_id,
             name=annotation_class.name,
-            color=annotation_class.color,
+            color=annotation_class.display_color,
             count=count
         )
     

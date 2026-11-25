@@ -22,7 +22,7 @@ from typing import Iterable, List, Optional
 from django.db import transaction
 from django.utils import timezone
 
-from fleet import artifacts, keys
+from fleet import artifacts, keys, samples
 from fleet.models import Device, DeviceModel, HealthSample, Rollout, RolloutTarget, Site
 
 DEFAULT_POLL_SECONDS = int(os.getenv("FLEET_POLL_SECONDS", "30"))
@@ -208,6 +208,9 @@ def heartbeat(device: Device, payload: dict, *, ip: Optional[str] = None, reques
                 continue
             HealthSample.objects.update_or_create(device=device, at=_minute(at), defaults={"metrics": point.get("metrics") or {}})
         device.save()
+        if payload.get("prediction_stats"):
+            from fleet import field
+            field.store_summaries(device, payload["prediction_stats"], now)
         for report in payload.get("models") or []:
             rollout = _apply_report(device, report, now)
             if rollout is not None:
@@ -224,20 +227,23 @@ def desired_state(device: Device, *, state_token: Optional[str] = None, refresh:
                .select_related("model", "desired_version__storage_profile", "desired_version__model__task",
                                "desired_version__model__framework").order_by("model__name")):
         art = artifacts.ready_artifact(dm.desired_version, device.accepts)
-        entries.append((dm, art))
+        entries.append((dm, art, samples.device_policy(device, dm.model)))
+    # The policy is part of the token: turning sampling on or off reaches devices without a new version.
     token = hashlib.sha1("|".join(
-        f"{dm.model.model_id}:{dm.desired_version.version_id}:{art.sha256 if art else 'pending'}" for dm, art in entries
+        f"{dm.model.model_id}:{dm.desired_version.version_id}:{art.sha256 if art else 'pending'}:{sorted(pol.items())}"
+        for dm, art, pol in entries
     ).encode()).hexdigest()[:16]
     base = {"protocol": PROTOCOL, "device_id": str(device.device_id), "poll_seconds": poll_seconds(device),
             "state_token": token, "server_time": timezone.now().isoformat()}
     if state_token == token and not refresh:
         return {**base, "unchanged": True}
     models = []
-    for dm, art in entries:
+    for dm, art, pol in entries:
         v = dm.desired_version
         entry = {"model_id": dm.model.model_id, "model_name": dm.model.name, "version_id": v.version_id,
                  "version_name": v.version_name, "rollout_id": str(dm.rollout.rollout_id) if dm.rollout_id else None,
-                 "ready": art is not None, "artifact": None, "manifest": None}
+                 "ready": art is not None, "artifact": None, "manifest": None,
+                 "sampling": {k: pol[k] for k in ("enabled", "low_confidence_below", "classes", "random_per_hour", "max_per_hour")}}
         if art is not None:
             url, expires = artifacts.download_url(art, request_base)
             entry["artifact"] = {"format": art.format, "url": url, "sha256": art.sha256,

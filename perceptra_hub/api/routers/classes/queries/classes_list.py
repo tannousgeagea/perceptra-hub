@@ -56,7 +56,7 @@ async def get_classes(
                     id=cls.id,
                     classId=cls.class_id,
                     name=cls.name,
-                    color=cls.color,
+                    color=cls.display_color,
                     count=Annotation.objects.filter(project_image__project=project, annotation_class=cls, is_active=True).count()
                 )
             )

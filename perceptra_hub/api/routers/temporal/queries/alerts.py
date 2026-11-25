@@ -45,6 +45,9 @@ class AlertResponse(BaseModel):
     is_acknowledged: bool
     alert_date: datetime
     acknowledged_at: Optional[datetime] = None
+    # Field alerts (edge devices): where it happened. Empty for project-wide alerts.
+    site: Optional[Dict[str, str]] = None
+    device: Optional[Dict[str, str]] = None
 
 
 class AcknowledgeResponse(BaseModel):
@@ -92,7 +95,7 @@ async def list_project_alerts(
 ):
     @sync_to_async
     def _alerts():
-        qs = MetricAlert.objects.filter(project=project_ctx.project).order_by("-alert_date")
+        qs = MetricAlert.objects.filter(project=project_ctx.project).select_related("site", "device").order_by("-alert_date")
         if acknowledged is not None:
             qs = qs.filter(is_acknowledged=acknowledged)
         return list(qs[:limit])
@@ -110,6 +113,8 @@ async def list_project_alerts(
             is_acknowledged=a.is_acknowledged,
             alert_date=a.alert_date,
             acknowledged_at=a.acknowledged_at,
+            site={"site_id": str(a.site.site_id), "name": a.site.name} if a.site_id else None,
+            device={"device_id": str(a.device.device_id), "name": a.device.name} if a.device_id else None,
         )
         for a in await _alerts()
     ]

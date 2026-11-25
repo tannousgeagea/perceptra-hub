@@ -87,7 +87,11 @@ class MetricAlert(models.Model):
         blank=True
     )
     alert_date = models.DateTimeField(auto_now_add=True, db_index=True)
-    
+
+    # Field alerts (from edge devices): where the model drifted. Empty for project-wide alerts.
+    site = models.ForeignKey('fleet.Site', on_delete=models.SET_NULL, null=True, blank=True, related_name='alerts')
+    device = models.ForeignKey('fleet.Device', on_delete=models.SET_NULL, null=True, blank=True, related_name='alerts')
+
     # Alert details
     severity = models.CharField(max_length=20, choices=SEVERITY_CHOICES)
     metric_name = models.CharField(max_length=50)

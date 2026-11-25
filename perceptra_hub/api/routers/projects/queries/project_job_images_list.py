@@ -206,7 +206,7 @@ def _job_images_response(queryset, job_summary, *, skip, limit, status_filter, a
                         "type": ann.annotation_type.name if ann.annotation_type else None,
                         "class_id": ann.annotation_class.class_id,
                         "class_name": ann.annotation_class.name,
-                        "color": ann.annotation_class.color,
+                        "color": ann.annotation_class.display_color,
                         "data": ann.data,
                         "source": ann.annotation_source,
                         "confidence": ann.confidence,

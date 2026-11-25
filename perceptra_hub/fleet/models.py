@@ -24,6 +24,8 @@ class Site(models.Model):
     name = models.CharField(max_length=120)
     location = models.CharField(max_length=255, blank=True, default='')
     timezone = models.CharField(max_length=64, blank=True, default='', help_text="IANA name, e.g. Europe/Berlin")
+    # Off: devices here send no images (privacy), only prediction summaries.
+    allow_images = models.BooleanField(default=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -227,3 +229,96 @@ class HealthSample(models.Model):
         db_table = 'fleet_health_sample'
         constraints = [models.UniqueConstraint(fields=['device', 'at'], name='fleet_health_unique_minute')]
         indexes = [models.Index(fields=['at'])]
+
+
+class PredictionStat(models.Model):
+    """
+    What one device's model saw in one hour, on one camera: every inference the
+    inference service recorded, summarised on the device (no images). The
+    current hour is re-sent as it grows and replaced here.
+    """
+    BINS = 10  # confidence histogram: [0, .1) … [.9, 1]
+
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name='prediction_stats')
+    model = models.ForeignKey('ml_models.Model', on_delete=models.CASCADE, related_name='prediction_stats')
+    # Null when the device ran a version this platform doesn't know (or none yet).
+    version = models.ForeignKey('ml_models.ModelVersion', on_delete=models.SET_NULL, null=True, blank=True, related_name='prediction_stats')
+    camera = models.CharField(max_length=80, blank=True, default='')
+    hour = models.DateTimeField()
+    inferences = models.PositiveIntegerField(default=0)
+    object_count = models.PositiveIntegerField(default=0)  # detections ("objects" would clash with the manager)
+    confidence_hist = models.JSONField(default=list)   # BINS counts of objects by confidence
+    class_counts = models.JSONField(default=dict)      # {class name: objects}
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fleet_prediction_stat'
+        constraints = [models.UniqueConstraint(fields=['device', 'model', 'version', 'camera', 'hour'],
+                                               name='fleet_prediction_stat_unique_hour')]
+        indexes = [models.Index(fields=['model', 'hour']), models.Index(fields=['hour'])]
+
+
+class SamplingPolicy(models.Model):
+    """
+    Which field images devices keep for a model (sent to them in the desired
+    state). Off until a project admin turns it on: images leave customer sites.
+    A site can refuse images whatever the policy (Site.allow_images).
+    """
+    model = models.OneToOneField('ml_models.Model', on_delete=models.CASCADE, related_name='sampling_policy')
+    enabled = models.BooleanField(default=False)
+    low_confidence_below = models.FloatField(default=0.4, help_text="Keep frames with a detection below this confidence (0 = off)")
+    classes = models.JSONField(default=list, blank=True, help_text="Keep frames with any of these classes")
+    random_per_hour = models.PositiveIntegerField(default=2, help_text="Unbiased frames per hour and device")
+    max_per_hour = models.PositiveIntegerField(default=10, help_text="Cap per hour and device, all reasons together")
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'fleet_sampling_policy'
+
+
+class FieldSample(models.Model):
+    """
+    One image a device kept, with what the model found in it. Uploaded straight
+    to storage when it can mint upload links, else through the API; then
+    registered into the model's project (prediction labels to review), where
+    active learning ranks it. Unreviewed samples are deleted after 30 days.
+    """
+    class Reason(models.TextChoices):
+        LOW_CONFIDENCE = 'low_confidence', 'Low confidence'
+        CLASS = 'class', 'Class of interest'
+        RANDOM = 'random', 'Random'
+
+    class Status(models.TextChoices):
+        UPLOADING = 'uploading', 'Waiting for the file'
+        REGISTERED = 'registered', 'In the project'
+        FAILED = 'failed', 'Failed'
+
+    sample_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    organization = models.ForeignKey('organizations.Organization', on_delete=models.CASCADE, related_name='field_samples')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name='field_samples')
+    site = models.ForeignKey(Site, on_delete=models.SET_NULL, null=True, blank=True, related_name='field_samples')  # where it was taken
+    model = models.ForeignKey('ml_models.Model', on_delete=models.CASCADE, related_name='field_samples')
+    version = models.ForeignKey('ml_models.ModelVersion', on_delete=models.SET_NULL, null=True, blank=True, related_name='field_samples')
+    camera = models.CharField(max_length=80, blank=True, default='')
+    captured_at = models.DateTimeField()
+    reason = models.CharField(max_length=20, choices=Reason.choices)
+    predictions = models.JSONField(default=list)
+    storage_profile = models.ForeignKey('storage.StorageProfile', on_delete=models.PROTECT, related_name='+')
+    storage_key = models.CharField(max_length=500)
+    file_format = models.CharField(max_length=10, default='jpg')
+    size_bytes = models.PositiveIntegerField(default=0)
+    # From the device, or read from the bytes on an API upload; else probed from storage when registering.
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.UPLOADING, db_index=True)
+    error = models.CharField(max_length=500, blank=True, default='')
+    image = models.ForeignKey('images.Image', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    project_image = models.ForeignKey('projects.ProjectImage', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    registered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'fleet_field_sample'
+        ordering = ['-captured_at']
+        indexes = [models.Index(fields=['model', '-captured_at']), models.Index(fields=['device', 'created_at'])]

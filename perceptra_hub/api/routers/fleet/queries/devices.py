@@ -27,12 +27,14 @@ class SiteIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     location: str = Field("", max_length=255)
     timezone: str = Field("", max_length=64)
+    allow_images: bool = Field(True, description="Off: devices here send no images, only prediction summaries")
 
 
 class SitePatch(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=120)
     location: Optional[str] = Field(None, max_length=255)
     timezone: Optional[str] = Field(None, max_length=64)
+    allow_images: Optional[bool] = Field(None, description="Off: devices here send no images, only prediction summaries")
 
 
 class DeviceIn(BaseModel):
@@ -128,7 +130,7 @@ def create_site(body: SiteIn, ctx=ADMIN):
     from fleet.models import Site
     try:
         s = Site.objects.create(organization=ctx.organization, name=body.name.strip(), location=body.location.strip(),
-                                timezone=body.timezone.strip(), created_by=ctx.user)
+                                timezone=body.timezone.strip(), allow_images=body.allow_images, created_by=ctx.user)
     except IntegrityError:
         raise _conflict("A site")
     return serializers.site(s)
@@ -142,6 +144,8 @@ def update_site(site_id: UUID, body: SitePatch, ctx=ADMIN):
         value = getattr(body, field)
         if value is not None:
             setattr(s, field, value.strip())
+    if body.allow_images is not None:
+        s.allow_images = body.allow_images
     try:
         s.save()
     except IntegrityError:

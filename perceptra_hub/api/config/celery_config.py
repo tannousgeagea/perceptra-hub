@@ -191,6 +191,17 @@ class BaseConfig:
         'schedule': crontab(hour=3, minute=30),
         'options': {'queue': 'activity'},
     },
+    'fleet-prune-samples': {
+        'task': 'activity:fleet_prune_samples',
+        'schedule': crontab(hour=3, minute=45),
+        'options': {'queue': 'activity'},
+    },
+    # Field drift: each site against its own baseline, from devices' hourly prediction summaries.
+    'fleet-check-field': {
+        'task': 'activity:fleet_check_field',
+        'schedule': crontab(minute=10),
+        'options': {'queue': 'activity', 'expires': 3000},
+    },
 
     # Continuous training loop: evaluate retraining policies every hour
     'evaluate-retraining-policies': {
