@@ -156,6 +156,49 @@ def generate_storage_key(organization: Organization, filename: str, project_id: 
 
 
 # ============= Image Upload Endpoints =============
+# What happened to an uploaded file, for the person who sent it.
+OUTCOME_NEW = "new"                          # stored now
+OUTCOME_ADDED = "added_to_project"           # already in the organisation; linked to the project now
+OUTCOME_IN_PROJECT = "already_in_project"    # already in the organisation and in this project
+OUTCOME_IN_DATALAKE = "already_in_datalake"  # already in the organisation (no project given)
+
+
+def _link_and_tag(ctx: RequestContext, image, project_id: Optional[UUID], tag_names: List[str],
+                  batch_id: Optional[str]) -> Optional[bool]:
+    """Put the image in the project (restoring a removed link) and apply the tags; safe to repeat.
+    Returns True if it joined the project now, False if it was already there, None without a project."""
+    joined = None
+    if project_id:
+        from projects.models import Project, ProjectImage
+        try:
+            project = Project.objects.get(project_id=project_id, organization=ctx.organization)
+        except Project.DoesNotExist:
+            logger.warning(f"Project {project_id} not found")
+            project = None
+        if project is not None:
+            project_image, created = ProjectImage.objects.get_or_create(
+                image=image,
+                project=project,
+                defaults={'added_by': ctx.user, 'job_assignment_status': 'waiting'},
+            )
+            joined = created
+            if not created and not project_image.is_active:
+                # It was removed from the project before (soft delete keeps its labels and
+                # job): bring it back as it was.
+                project_image.is_active = True
+                project_image.save(update_fields=['is_active', 'updated_at'])
+                joined = True
+            if joined:
+                assigned_job = assign_uploaded_image_to_batch(project_image=project_image, batch_id=batch_id, user=ctx.user)
+                if assigned_job:
+                    logger.info(f"Auto-assigned image to job {assigned_job.id}")
+
+    for tag_name in tag_names:
+        tag, _ = Tag.objects.get_or_create(organization=ctx.organization, name=tag_name)
+        ImageTag.objects.get_or_create(image=image, tag=tag, defaults={'tagged_by': ctx.user})
+    return joined
+
+
 @sync_to_async
 def process_image_upload(
     ctx: RequestContext,
@@ -186,9 +229,13 @@ def process_image_upload(
     ).first()
     
     if existing:
-        logger.warning(f"Duplicate image detected: {checksum}")
+        # Stored once per organisation: link the existing image where it was sent.
+        joined = _link_and_tag(ctx, existing, project_id, tag_names, batch_id)
+        outcome = OUTCOME_IN_DATALAKE if joined is None else (OUTCOME_ADDED if joined else OUTCOME_IN_PROJECT)
+        logger.info(f"Duplicate image {existing.image_id} ({checksum[:12]}): {outcome}")
         return {
             "duplicate": True,
+            "outcome": outcome,
             "image": existing
         }
     
@@ -274,57 +321,11 @@ def process_image_upload(
     )
     
     logger.info(f"Created image record: {image.id}")
-    # Associate with project if provided
-    if project_id:
-        from projects.models import Project, ProjectImage
-        try:
-            project = Project.objects.get(
-                project_id=project_id,
-                organization=ctx.organization
-            )
-            
-            project_image, pi_created = ProjectImage.objects.get_or_create(
-                image=image,
-                project=project,
-                defaults={
-                    'added_by': ctx.user,
-                    'job_assignment_status': 'waiting'
-                }
-            )
-            
-            if pi_created:
-                logger.info(f"Associated image {image.id} with project {project_id}")
-                
-                logger.warning(f"Batch ID: {batch_id}")
-                assigned_job = assign_uploaded_image_to_batch(
-                    project_image=project_image,
-                    batch_id=batch_id,
-                    user=ctx.user,
-                )
-                
-                if assigned_job:
-                    logger.info(f"Auto-assigned image to job {assigned_job.id}")
-        except Project.DoesNotExist:
-            logger.warning(f"Project {project_id} not found")
-    
-    # Add tags if provided
-    if tag_names:
-        for tag_name in tag_names:
-            tag, created = Tag.objects.get_or_create(
-                organization=ctx.organization,
-                name=tag_name
-            )
-            
-            ImageTag.objects.create(
-                image=image,
-                tag=tag,
-                tagged_by=ctx.user
-            )
-        
-        logger.info(f"Added {len(tag_names)} tags to image {image.id}")
-    
+    _link_and_tag(ctx, image, project_id, tag_names, batch_id)
+
     return {
         "duplicate": False,
+        "outcome": OUTCOME_NEW,
         "image": image
     }
     
@@ -378,19 +379,23 @@ async def upload_image(
                     detail="Invalid image_id format. Must be a valid UUID."
                 )
             
-            # Check if image_id already exists
-            if await sync_to_async(Image.objects.filter(
-                organization=ctx.organization,
-                image_id=image_id
-            ).exists)():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Image with image_id '{image_id}' already exists"
-                )
-        
         # Read file data
         file_data = await file.read()
         file_size = len(file_data)
+
+        if image_id:
+            # The same image_id again: a retry of an upload the server already stored
+            # (same bytes) is answered like a duplicate; other content is a conflict.
+            taken = await sync_to_async(lambda: Image.objects.filter(
+                organization=ctx.organization, image_id=image_id
+            ).values_list("checksum", flat=True).first())()
+            if taken is not None:
+                if taken != calculate_checksum(file_data):
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Image with image_id '{image_id}' already exists"
+                    )
+                image_id = None   # the checksum match below finds it
         
         # Validate file size (max 50MB)
         max_size = 50 * 1024 * 1024  # 50MB
@@ -422,10 +427,16 @@ async def upload_image(
         image = result["image"]
         
         if result["duplicate"]:
+            messages = {
+                OUTCOME_ADDED: "Already in the data lake; added to the project",
+                OUTCOME_IN_PROJECT: "Already in this project",
+                OUTCOME_IN_DATALAKE: "Already in the data lake",
+            }
             return {
-                "message": "Image already exists",
-                "image_id": str(image.id),
-                "duplicate": True
+                "message": messages[result["outcome"]],
+                "image_id": str(image.image_id),
+                "duplicate": True,
+                "outcome": result["outcome"],
             }
         
         # Generate download URL
@@ -449,7 +460,8 @@ async def upload_image(
             "checksum": image.checksum,
             "download_url": download_url,
             "created_at": image.created_at.isoformat(),
-            "duplicate": False
+            "duplicate": False,
+            "outcome": result["outcome"],
         }
         
     except HTTPException:
