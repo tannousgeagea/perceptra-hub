@@ -138,7 +138,8 @@ class AgentManager:
         agent: Agent,
         status: str,
         gpu_info: Optional[List[Dict]] = None,
-        system_info: Optional[Dict] = None
+        system_info: Optional[Dict] = None,
+        version: Optional[str] = None,
     ):
         """
         Process agent heartbeat.
@@ -165,7 +166,12 @@ class AgentManager:
         if system_info is not None:
             agent.system_info = system_info
             update_fields.append('system_info')
-        
+
+        # The agent image's release tag (older agents don't send one)
+        if version and version != agent.version:
+            agent.version = version
+            update_fields.append('version')
+
         agent.save(update_fields=update_fields)
         
         # Cache agent status for quick checks

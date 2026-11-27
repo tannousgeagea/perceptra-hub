@@ -115,4 +115,9 @@ COPY ./entrypoint.sh /home/.
 RUN /bin/bash -c "chown -R $user:$user /home/$user/"
 RUN /bin/bash -c "chown $user:$user /home/entrypoint.sh"
 
+# This release's tag, set by CI (empty in local builds). New compute agents and
+# edge devices are given the agent images with the same tag.
+ARG APP_VERSION=""
+ENV APP_VERSION=${APP_VERSION}
+
 ENTRYPOINT /bin/bash -c ". /home/entrypoint.sh"

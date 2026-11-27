@@ -1,5 +1,6 @@
 # The sidecar. Run it next to your inference container, sharing the model volume:
 #
+#   CI publishes it as tannousgeagea/perceptra-edge-agent:<hub release>; to build it yourself:
 #   docker build -t malumetrix-edge-agent edge-agent/
 #   docker run -d --name malumetrix-edge --restart unless-stopped \
 #     -v malumetrix-data:/var/lib/malumetrix \
@@ -25,6 +26,12 @@ RUN pip install --no-cache-dir . && rm -rf /root/.cache
 USER malumetrix
 VOLUME ["/var/lib/malumetrix"]
 ENV MALUMETRIX_DATA_DIR=/var/lib/malumetrix PYTHONUNBUFFERED=1
+
+# The hub release this image was published with (CI sets it); the agent reports it
+ARG AGENT_VERSION=""
+ENV MALUMETRIX_EDGE_VERSION=${AGENT_VERSION}
+LABEL org.opencontainers.image.title="Malumetrix edge agent" \
+      org.opencontainers.image.version="${AGENT_VERSION}"
 EXPOSE 7070
 ENTRYPOINT ["malumetrix-edge"]
 CMD ["run"]

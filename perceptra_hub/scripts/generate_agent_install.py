@@ -8,13 +8,14 @@ def generate_install_command(
     agent_key: str,
     agent_secret: str,
     agent_id: str,
-    registry: str = "your-registry.io",
-    image_tag: str = "latest",
+    image: str,
     gpu_ids: str = "all"
 ) -> dict:
     """
     Generate install commands for agent deployment.
-    
+
+    image: the full image reference, e.g. tannousgeagea/perceptra-agent:v0.14.0
+
     Returns:
         dict with 'docker_run', 'docker_compose', 'curl_script'
     """
@@ -33,14 +34,14 @@ def generate_install_command(
   -e AGENT_ID="{agent_id}" \\
   -v agent-datasets:/tmp/agent-work/datasets \\
   -v agent-outputs:/tmp/agent-work/outputs \\
-  {registry}/cv-training-agent:{image_tag}"""
+  {image}"""
     
     # Docker Compose
     docker_compose = f"""version: '3.8'
 
 services:
   agent:
-    image: {registry}/cv-training-agent:{image_tag}
+    image: {image}
     container_name: cv-training-agent
     restart: unless-stopped
     deploy:
@@ -64,7 +65,8 @@ volumes:
   agent-outputs:"""
     
     # Curl install script (downloads and runs)
-    curl_script = f"""curl -fsSL {api_url}/install-agent.sh | bash -s -- \\
+    curl_script = f"""curl -fsSL {api_url}/api/v1/agents/install-agent.sh | bash -s -- \\
+  --image "{image}" \\
   --key "{agent_key}" \\
   --secret "{agent_secret}" \\
   --id "{agent_id}" \\

@@ -102,8 +102,11 @@ def _conflict(what):
 
 def _install(code: str) -> dict:
     """The one-time code, shown once. The device runs: malumetrix-edge enroll --url <server> --code <code>."""
+    from django.conf import settings
     from fleet.keys import CODE_TTL
-    return {"code": code, "expires_at": (timezone.now() + CODE_TTL).isoformat()}
+    return {"code": code, "expires_at": (timezone.now() + CODE_TTL).isoformat(),
+            # The published edge-agent image of this hub's release, for the docker command
+            "agent_image": f"{settings.EDGE_AGENT_IMAGE}:{settings.AGENT_IMAGE_TAG}"}
 
 
 # ── Sites ────────────────────────────────────────────────────────────────────

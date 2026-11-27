@@ -3,6 +3,8 @@ Agent install script endpoint.
 File: api/routers/install.py
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Query
 from fastapi.responses import PlainTextResponse
 
@@ -22,8 +24,7 @@ API_URL=""
 AGENT_KEY=""
 AGENT_SECRET=""
 AGENT_ID=""
-REGISTRY="{registry}"
-IMAGE_TAG="{image_tag}"
+IMAGE="{image}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -31,8 +32,7 @@ while [[ $# -gt 0 ]]; do
     --key) AGENT_KEY="$2"; shift 2 ;;
     --secret) AGENT_SECRET="$2"; shift 2 ;;
     --id) AGENT_ID="$2"; shift 2 ;;
-    --registry) REGISTRY="$2"; shift 2 ;;
-    --tag) IMAGE_TAG="$2"; shift 2 ;;
+    --image) IMAGE="$2"; shift 2 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -70,7 +70,7 @@ echo -e "${{GREEN}}✓ Docker and NVIDIA support OK${{NC}}"
 
 # Pull image
 echo "Pulling agent image..."
-docker pull $REGISTRY/cv-training-agent:$IMAGE_TAG
+docker pull "$IMAGE"
 
 # Stop existing agent
 if [ "$(docker ps -q -f name=cv-training-agent)" ]; then
@@ -91,7 +91,7 @@ docker run -d \\
   -e AGENT_ID="$AGENT_ID" \\
   -v agent-datasets:/tmp/agent-work/datasets \\
   -v agent-outputs:/tmp/agent-work/outputs \\
-  $REGISTRY/cv-training-agent:$IMAGE_TAG
+  "$IMAGE"
 
 echo ""
 echo -e "${{GREEN}}✓ Agent installed and running!${{NC}}"
@@ -106,14 +106,15 @@ echo "  Remove:       docker stop cv-training-agent && docker rm cv-training-age
 
 @router.get("/install-agent.sh", response_class=PlainTextResponse)
 async def get_install_script(
-    registry: str = Query("your-registry.io", description="Docker registry"),
-    tag: str = Query("latest", description="Image tag")
+    tag: Optional[str] = Query(None, pattern=r"^[A-Za-z0-9_.-]{1,128}$",
+                               description="Image tag; defaults to this hub's release"),
 ):
     """
     Generate agent install script.
-    Usage: curl -fsSL https://platform.com/install-agent.sh | bash -s -- --key KEY --secret SECRET
+    Usage: curl -fsSL https://platform.com/api/v1/agents/install-agent.sh | bash -s -- --key KEY --secret SECRET
     """
+    from django.conf import settings
+    # Only the tag can be chosen: the image itself is the platform's, never a URL parameter.
     return INSTALL_SCRIPT_TEMPLATE.format(
-        registry=registry,
-        image_tag=tag
+        image=f"{settings.COMPUTE_AGENT_IMAGE}:{tag or settings.AGENT_IMAGE_TAG}",
     )

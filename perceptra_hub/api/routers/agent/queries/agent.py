@@ -303,9 +303,10 @@ async def agent_heartbeat(
             agent=agent,
             status=request.status,
             gpu_info=gpu_info,
-            system_info=system_info
+            system_info=system_info,
+            version=request.agent_version,
         )
-    
+
     await handle()
     
     return {"status": "ok", "message": "Heartbeat received"}
@@ -469,15 +470,18 @@ def _generate_install_command(
     agent_id: str
 ) -> str:
     """Generate one-liner install command for agent"""
+    from django.conf import settings
     from scripts.generate_agent_install import generate_install_command
     # Clean API URL
     api_url = api_url.rstrip('/')
-    
+
     commands = generate_install_command(
         api_url=api_url,
         agent_key=key_id,
         agent_secret=secret_key,
-        agent_id=agent_id
+        agent_id=agent_id,
+        # The same release as this hub (see settings.AGENT_IMAGE_TAG)
+        image=f"{settings.COMPUTE_AGENT_IMAGE}:{settings.AGENT_IMAGE_TAG}",
     )
     
     # Return docker run as primary command
