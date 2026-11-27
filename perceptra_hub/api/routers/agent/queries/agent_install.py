@@ -84,6 +84,7 @@ echo "Starting agent..."
 docker run -d \\
   --name cv-training-agent \\
   --gpus all \\
+  --shm-size=8g \\
   --restart unless-stopped \\
   -e API_URL="$API_URL" \\
   -e AGENT_KEY="$AGENT_KEY" \\

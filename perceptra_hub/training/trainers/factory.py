@@ -290,6 +290,9 @@ def get_trainer(
     for key, value in kwargs.items():
         if key in training_config_fields:
             config_kwargs[key] = value
+        elif key == 'model_params' and isinstance(value, dict):
+            # Session configs nest these ({'model_params': {'model_size': 'nano'}})
+            model_params.update(value)
         else:
             model_params[key] = value
     
