@@ -49,6 +49,10 @@ async def list_project_images(
         description="Search query (e.g., 'status:annotated tag:car min-width:1920')",
         alias="q"
     ),
+    exclude_version: Optional[UUID] = Query(
+        None,
+        description="Leave out images already in this dataset version (its version_id)",
+    ),
     # Legacy filters (deprecated but supported)
     status: Optional[str] = Query(None, deprecated=True),
     annotated: Optional[bool] = Query(None, deprecated=True)
@@ -97,7 +101,10 @@ async def list_project_images(
                 queryset = queryset.filter(annotated=legacy_annotated)
         
             queryset = queryset.order_by('-priority', '-added_at')
-            
+
+        if exclude_version:
+            queryset = queryset.exclude(associated_versions__version__version_id=exclude_version)
+
 
         counts = queryset.aggregate(
             annotated_count=Count('id', filter=Q(status='annotated')),

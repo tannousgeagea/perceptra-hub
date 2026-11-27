@@ -27,6 +27,7 @@ def generate_install_command(
     docker_run = f"""docker run -d \\
   --name cv-training-agent \\
   --gpus {gpu_ids} \\
+  --shm-size=8g \\
   --restart unless-stopped \\
   -e API_URL="{api_url}" \\
   -e AGENT_KEY="{agent_key}" \\
@@ -44,6 +45,8 @@ services:
     image: {image}
     container_name: cv-training-agent
     restart: unless-stopped
+    # PyTorch dataloader workers share batches through /dev/shm (Docker's 64 MB default isn't enough)
+    shm_size: 8gb
     deploy:
       resources:
         reservations:

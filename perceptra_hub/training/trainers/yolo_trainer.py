@@ -13,6 +13,12 @@ import torch
 
 logger = logging.getLogger(__name__)
 
+# Ultralytics matches optimizer names exactly ('Adam', not 'adam') and raises otherwise
+YOLO_OPTIMIZERS = {
+    name.lower(): name
+    for name in ('SGD', 'Adam', 'Adamax', 'AdamW', 'NAdam', 'RAdam', 'RMSProp', 'auto')
+}
+
 
 class YOLOTrainer(BaseTrainer):
     """
@@ -185,7 +191,20 @@ class YOLOTrainer(BaseTrainer):
         
         # Add optimizer settings
         if self.config.optimizer:
-            train_args['optimizer'] = self.config.optimizer
+            optimizer = YOLO_OPTIMIZERS.get(str(self.config.optimizer).lower())
+            if optimizer:
+                train_args['optimizer'] = optimizer
+            else:
+                logger.warning(f"Unknown optimizer '{self.config.optimizer}', letting YOLO choose (auto)")
+                train_args['optimizer'] = 'auto'
+
+        # Ultralytics decays the learning rate linearly or by cosine; other schedulers
+        # (step, exponential, plateau) have no YOLO equivalent and keep the linear decay
+        scheduler = str(self.config.scheduler or '').lower()
+        if scheduler == 'cosine':
+            train_args['cos_lr'] = True
+        elif scheduler and scheduler not in ('linear', 'none'):
+            logger.warning(f"Scheduler '{self.config.scheduler}' isn't supported by YOLO; using linear decay")
         
         # Add augmentation settings
         if not self.config.augmentation:

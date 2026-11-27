@@ -18,5 +18,11 @@ pandas==2.2.2
 
 # Training frameworks
 ultralytics==8.3.0  # YOLO v8-11
+# ONNX export after training (ultralytics would otherwise pip-install these at
+# runtime, which the base image's system Python refuses)
+onnx>=1.12.0
+onnxslim==0.1.34
+onnxruntime-gpu
+onnxscript  # torch 2.9+ exports ONNX through this
 transformers==4.40.0  # RT-DETR
 timm==0.9.16  # Vision models

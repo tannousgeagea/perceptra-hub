@@ -3,6 +3,30 @@ from ml_models.models import Model, ModelVersion, ModelTag, ModelFramework, Mode
 from asgiref.sync import sync_to_async
 from fastapi import HTTPException, status
 
+# Console forms send camelCase; trainers read snake_case
+TRAINING_CONFIG_KEYS = {
+    'batchSize': 'batch_size',
+    'learningRate': 'learning_rate',
+    'modelSize': 'model_size',
+}
+
+
+def build_training_config(request_config: dict | None, model_defaults: dict | None) -> dict:
+    """
+    One run's training config: the model's saved settings (chosen when it was
+    created: epochs, optimizer, scheduler, ...) with the request's values on top.
+    model_size is left out here; the caller puts it in model_params.
+    """
+    config = {}
+    for source in (model_defaults or {}, request_config or {}):
+        for key, value in source.items():
+            key = TRAINING_CONFIG_KEYS.get(key, key)
+            if key == 'model_size' or value is None:
+                continue
+            config[key] = value
+    return config
+
+
 def serialize_model_version(version: ModelVersion) -> dict:
     """Serialize a model version to dict"""
     dataset_info = None
@@ -74,6 +98,8 @@ def serialize_model_detail(model: Model) -> dict:
         "tags": [tag.name for tag in model.tags.all()],
         "project_id": str(model.project.project_id),
         "project_name": model.project.name,
+        # Saved training settings; the train forms start from these
+        "config": model.default_config or {},
         "versions": versions,
         "latest_version": serialize_model_version(latest_version) if latest_version else None,
         "production_version": serialize_model_version(production_version) if production_version else None,
