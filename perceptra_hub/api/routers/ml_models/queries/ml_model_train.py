@@ -19,7 +19,7 @@ from api.dependencies import (
     ProjectContext
 )
 
-from api.routers.ml_models.utils import serialize_model_detail
+from api.routers.ml_models.utils import serialize_model_detail, build_training_config
 from api.routers.ml_models.schemas import TrainingTriggerRequest, TrainingTriggerResponse
 from asgiref.sync import sync_to_async
 from projects.dependencies import require_project_permission
@@ -117,8 +117,9 @@ async def trigger_training(
             detail="No default storage profile configured for organization"
         )
     
-    # Build training config, injecting model_size from model defaults if not already present
-    training_config = dict(data.config) if data.config else {}
+    # Build training config: the model's saved settings, then this request's values;
+    # model_size goes into model_params (from the request, else the model's default)
+    training_config = build_training_config(data.config, model.default_config)
     if 'model_params' not in training_config:
         training_config['model_params'] = {}
     if not training_config['model_params'].get('model_size'):

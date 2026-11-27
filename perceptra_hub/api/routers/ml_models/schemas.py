@@ -76,6 +76,7 @@ class ModelDetailResponse(BaseModel):
     tags: List[str]
     project_id: str
     project_name: str
+    config: Dict[str, Any] = Field(default_factory=dict)
     versions: List[ModelVersionResponse]
     latest_version: Optional[ModelVersionResponse] = None
     production_version: Optional[ModelVersionResponse] = None
