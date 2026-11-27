@@ -194,6 +194,14 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Malumetrix <no-reply@
 SECRET_ENCRYPTION_KEY = os.getenv("SECRET_ENCRYPTION_KEY")
 COMPUTE_CREDENTIALS_KEY = env("COMPUTE_CREDENTIALS_KEY")
 
+# This hub's release (baked into the image by CI, e.g. "v0.14.0"; empty in a local build).
+APP_VERSION = env("APP_VERSION", "")
+# Agent images handed to new compute agents and edge devices. CI publishes both with
+# the hub's release tag, so by default an agent runs the same release as its hub.
+AGENT_IMAGE_TAG = env("AGENT_IMAGE_TAG", "") or APP_VERSION or "latest"
+COMPUTE_AGENT_IMAGE = env("COMPUTE_AGENT_IMAGE", "tannousgeagea/perceptra-agent")
+EDGE_AGENT_IMAGE = env("EDGE_AGENT_IMAGE", "tannousgeagea/perceptra-edge-agent")
+
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/
 

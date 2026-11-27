@@ -69,6 +69,7 @@ class HeartbeatRequest(BaseModel):
     status: str  # ready, busy, error
     gpu_info: Optional[List[GPUInfo]] = None
     system_info: Optional[SystemInfo] = None
+    agent_version: Optional[str] = Field(None, max_length=50)  # the image's release tag
 
 class JobProgressRequest(BaseModel):
     job_id: str

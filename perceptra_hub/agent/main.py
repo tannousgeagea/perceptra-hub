@@ -37,6 +37,8 @@ AGENT_SECRET = os.getenv('AGENT_SECRET')
 AGENT_ID = os.getenv('AGENT_ID')
 POLL_INTERVAL = int(os.getenv('POLL_INTERVAL', '10'))  # seconds
 HEARTBEAT_INTERVAL = int(os.getenv('HEARTBEAT_INTERVAL', '30'))  # seconds
+# Baked into the image at build time: the hub release it belongs to
+AGENT_VERSION = os.getenv('AGENT_VERSION', 'dev')
 
 # Paths
 WORK_DIR = Path('/tmp/agent-work')
@@ -81,7 +83,8 @@ class AgentClient:
                 json={
                     'status': status,
                     'gpu_info': gpu_info,
-                    'system_info': system_info
+                    'system_info': system_info,
+                    'agent_version': AGENT_VERSION,
                 },
                 timeout=10
             )

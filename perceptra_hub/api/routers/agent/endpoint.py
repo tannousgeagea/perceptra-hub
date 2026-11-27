@@ -11,6 +11,9 @@ QUERIES = [
     if f.endswith('.py') 
     if not f.endswith('__.py')
     ]
+# The installer's fixed path (/agents/install-agent.sh) must be registered before
+# agent.py's GET /agents/{agent_id}, which would otherwise catch it.
+QUERIES.sort(key=lambda q: (not q.endswith('.agent_install'), q))
 
 router = APIRouter(
     prefix="/api/v1",
